@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ignore everything inside data/event/
+data/events/*
+
+# Keep the event folder
+!data/events/.gitkeep
+
+# Ignore everything inside models/
+models/*
+
+# Keep the models folder
+!data/models/.gitkeep

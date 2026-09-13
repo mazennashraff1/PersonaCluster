@@ -44,6 +44,15 @@ class PersonObservation:
     face_detection_confidence: Optional[float]
 
     # ---------------------------------------------------------
+    # Face pose
+    # ---------------------------------------------------------
+    # Coarse head-pose estimate derived from InsightFace landmarks.
+    face_yaw: Optional[float] = None
+    face_pitch: Optional[float] = None
+    face_roll: Optional[float] = None
+    face_pose: Optional[str] = None
+
+    # ---------------------------------------------------------
     # Face/body geometric association
     # ---------------------------------------------------------
 

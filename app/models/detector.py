@@ -78,3 +78,11 @@ class FaceDetection:
     confidence: float
     landmarks: Optional[object] = None
     embedding: Optional[np.ndarray] = None
+
+    # Coarse head-pose estimate derived from InsightFace landmarks.
+    # Values are in degrees and are intended for identity matching
+    # and representative selection, not medical/measurement use.
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    roll: Optional[float] = None
+    pose: Optional[str] = None

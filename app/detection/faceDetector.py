@@ -5,6 +5,7 @@ from insightface.app import FaceAnalysis
 
 from app import configuration as config
 from app.models.detector import BoundingBox, FaceDetection
+from app.identity.facePoseEstimator import FacePoseEstimator
 
 
 class FaceDetector:
@@ -30,6 +31,8 @@ class FaceDetector:
             det_size=detection_size,
             det_thresh=detection_threshold,
         )
+
+        self.pose_estimator = FacePoseEstimator()
 
     def detect(self, image) -> List[FaceDetection]:
         """
@@ -69,6 +72,11 @@ class FaceDetector:
                 if norm > 0:
                     embedding = embedding / norm
 
+            yaw, pitch, roll, pose = self.pose_estimator.estimate(
+                landmarks=face.kps,
+                image_shape=image.shape,
+            )
+
             detections.append(
                 FaceDetection(
                     bbox=BoundingBox(
@@ -80,6 +88,10 @@ class FaceDetector:
                     confidence=float(face.det_score),
                     landmarks=face.kps,
                     embedding=embedding,
+                    yaw=yaw,
+                    pitch=pitch,
+                    roll=roll,
+                    pose=pose,
                 )
             )
 

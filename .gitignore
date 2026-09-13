@@ -228,3 +228,7 @@ models/*
 
 # Keep the models folder
 !data/models/.gitkeep
+
+credentials.json
+token.json
+*.db

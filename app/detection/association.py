@@ -7,6 +7,7 @@ from app.models.detector import (
 )
 from app.models.observation import PersonObservation
 from app import configuration as config
+from app.identity.facePoseEstimator import FacePoseEstimator
 
 
 class AssociationEngine:
@@ -198,6 +199,12 @@ class AssociationEngine:
                 used_body_ids=used_body_ids,
             )
 
+            face_yaw, face_pitch, face_roll, face_pose = FacePoseEstimator.estimate(
+                face_detection.landmarks,
+                frontal_yaw_degrees=config.FACE_POSE_FRONTAL_YAW_DEGREES,
+                profile_yaw_degrees=config.FACE_POSE_PROFILE_YAW_DEGREES,
+            )
+
             # -------------------------------------------------
             # Case A: Face + Body
             # -------------------------------------------------
@@ -216,6 +223,10 @@ class AssociationEngine:
                     face_bbox=face_detection.bbox,
                     face_detection_confidence=(face_detection.confidence),
                     association_score=association_score,
+                    face_yaw=face_yaw,
+                    face_pitch=face_pitch,
+                    face_roll=face_roll,
+                    face_pose=face_pose,
                     # Face embedding comes directly from
                     # InsightFace.
                     face_embedding=(face_detection.embedding),
@@ -235,6 +246,10 @@ class AssociationEngine:
                     face_bbox=face_detection.bbox,
                     face_detection_confidence=(face_detection.confidence),
                     association_score=0.0,
+                    face_yaw=face_yaw,
+                    face_pitch=face_pitch,
+                    face_roll=face_roll,
+                    face_pose=face_pose,
                     # Still keep the face embedding.
                     face_embedding=(face_detection.embedding),
                 )

@@ -13,8 +13,10 @@ onnxruntime
 Cython
 gdown
 yacs
-torchreid @ git+https://github.com/KaiyangZhou/deep-person-reid.git
 tqdm
 PyYAML
 requests
 matplotlib
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

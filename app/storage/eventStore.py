@@ -143,6 +143,66 @@ class EventStore:
             self._pending_images = 0
 
     # =========================================================
+    # Canonical image ID
+    # =========================================================
+
+    def _canonical_image_id(
+        self,
+        image_path: str | Path,
+    ) -> str:
+        """
+        Return the canonical full-path identifier for an image.
+
+        The full normalized path is used instead of only the filename
+        so files with the same name in different folders remain
+        distinct. For example:
+
+            /event/images/camera_01/photo.jpg
+            /event/images/camera_02/photo.jpg
+
+        become two different image IDs.
+        """
+
+        path = Path(image_path)
+
+        # Absolute paths are already unambiguous.
+        if path.is_absolute():
+            return str(path.resolve(strict=False))
+
+        # Normalize relative paths against the configured event root.
+        #
+        # The image discovery code may return paths such as:
+        #     data/events/Cocktail Area/16dash-42.jpg
+        # while EventStore itself is rooted at:
+        #     data/events
+        #
+        # In that case, blindly doing:
+        #     event_path / image_path
+        # would produce the broken path:
+        #     data/events/data/events/Cocktail Area/...
+        #
+        # Strip one or more repeated event-root prefixes first, then
+        # attach the normalized remainder to the absolute event root.
+        event_root_relative = Path(self.event_path)
+        relative_parts = list(path.parts)
+        root_parts = list(event_root_relative.parts)
+
+        while (
+            root_parts
+            and len(relative_parts) >= len(root_parts)
+            and relative_parts[: len(root_parts)] == root_parts
+        ):
+            relative_parts = relative_parts[len(root_parts) :]
+
+        normalized_relative = Path(*relative_parts) if relative_parts else Path()
+
+        return str(
+            (self.event_path.resolve(strict=False) / normalized_relative).resolve(
+                strict=False
+            )
+        )
+
+    # =========================================================
     # Schema
     # =========================================================
 
@@ -208,13 +268,21 @@ class EventStore:
                 moment_id INTEGER,
 
                 -- Identity / clustering
-                cluster_id INTEGER
+                cluster_id INTEGER,
+
+                -- Coarse face pose
+                face_yaw REAL,
+                face_pitch REAL,
+                face_roll REAL,
+                face_pose TEXT
             )
             """)
 
         # -----------------------------------------------------
         # Observation indexes
         # -----------------------------------------------------
+
+        self._ensure_observation_pose_columns()
 
         self.connection.execute("""
             CREATE INDEX IF NOT EXISTS
@@ -311,6 +379,14 @@ class EventStore:
             """)
 
         # -----------------------------------------------------
+        # Legacy image-ID migration
+        # -----------------------------------------------------
+        # Older event databases used only image_path.name as image_id.
+        # Convert those IDs to the same canonical full path used for
+        # all new jobs.
+        self._migrate_image_job_ids()
+
+        # -----------------------------------------------------
         # Job indexes
         # -----------------------------------------------------
 
@@ -325,6 +401,95 @@ class EventStore:
             idx_image_jobs_worker_id
             ON image_jobs(worker_id)
             """)
+
+        self.connection.commit()
+
+    # =========================================================
+    # Image-job schema migration
+    # =========================================================
+
+    def _migrate_image_job_ids(self) -> None:
+        """
+        Normalize legacy image job paths and IDs to canonical full paths.
+
+        This also repairs the accidental duplicated event-root prefix that
+        can occur when an older database was populated with paths such as:
+
+            data/events/data/events/Cocktail Area/16dash-42.jpg
+
+        Existing job state, attempts, and timestamps are preserved.
+        """
+        rows = self.connection.execute(
+            "SELECT job_id, image_id, image_path FROM image_jobs"
+        ).fetchall()
+
+        for job_id, current_image_id, image_path in rows:
+            canonical_path = self._canonical_image_id(image_path)
+
+            if (
+                str(current_image_id) != canonical_path
+                or str(image_path) != canonical_path
+            ):
+                self.connection.execute(
+                    """
+                    UPDATE image_jobs
+                    SET image_id = ?,
+                        image_path = ?
+                    WHERE job_id = ?
+                    """,
+                    (canonical_path, canonical_path, job_id),
+                )
+
+        # Observations store image_id separately from image_jobs. Normalize
+        # those values too so clustering/output never sees mixed path forms.
+        observation_rows = self.connection.execute(
+            "SELECT observation_id, image_id FROM observations"
+        ).fetchall()
+
+        for observation_id, current_image_id in observation_rows:
+            canonical_id = self._canonical_image_id(current_image_id)
+
+            if str(current_image_id) != canonical_id:
+                self.connection.execute(
+                    """
+                    UPDATE observations
+                    SET image_id = ?
+                    WHERE observation_id = ?
+                    """,
+                    (canonical_id, observation_id),
+                )
+
+        self.connection.commit()
+
+    # =========================================================
+    # Observation schema migration
+    # =========================================================
+
+    def _ensure_observation_pose_columns(self) -> None:
+        """
+        Add the new pose columns to an existing event database.
+
+        SQLite CREATE TABLE IF NOT EXISTS does not alter an existing
+        table, so older event.db files need a small additive migration.
+        """
+
+        cursor = self.connection.execute("PRAGMA table_info(observations)")
+        existing_columns = {str(row[1]) for row in cursor.fetchall()}
+
+        new_columns = {
+            "face_yaw": "REAL",
+            "face_pitch": "REAL",
+            "face_roll": "REAL",
+            "face_pose": "TEXT",
+        }
+
+        for column_name, sql_type in new_columns.items():
+            if column_name in existing_columns:
+                continue
+
+            self.connection.execute(
+                f"ALTER TABLE observations ADD COLUMN {column_name} {sql_type}"
+            )
 
         self.connection.commit()
 
@@ -495,7 +660,12 @@ class EventStore:
                 body_embedding_dimension,
 
                 moment_id,
-                cluster_id
+                cluster_id,
+
+                face_yaw,
+                face_pitch,
+                face_roll,
+                face_pose
             )
             VALUES (
                 :observation_id,
@@ -529,7 +699,12 @@ class EventStore:
                 :body_embedding_dimension,
 
                 :moment_id,
-                :cluster_id
+                :cluster_id,
+
+                :face_yaw,
+                :face_pitch,
+                :face_roll,
+                :face_pose
             )
             """,
             {
@@ -557,6 +732,10 @@ class EventStore:
                 "body_embedding_dimension": body_dimension,
                 "moment_id": observation.moment_id,
                 "cluster_id": observation.cluster_id,
+                "face_yaw": observation.face_yaw,
+                "face_pitch": observation.face_pitch,
+                "face_roll": observation.face_roll,
+                "face_pose": observation.face_pose,
             },
         )
 
@@ -752,7 +931,12 @@ class EventStore:
                 body_embedding_dimension,
 
                 moment_id,
-                cluster_id
+                cluster_id,
+
+                face_yaw,
+                face_pitch,
+                face_roll,
+                face_pose
 
             FROM observations
 
@@ -805,6 +989,10 @@ class EventStore:
             body_embedding_dimension,
             moment_id,
             cluster_id,
+            face_yaw,
+            face_pitch,
+            face_roll,
+            face_pose,
         ) = row
 
         person_bbox = self._values_to_bbox(
@@ -847,6 +1035,10 @@ class EventStore:
             body_embedding_valid=bool(body_embedding_valid),
             moment_id=moment_id,
             cluster_id=cluster_id,
+            face_yaw=face_yaw,
+            face_pitch=face_pitch,
+            face_roll=face_roll,
+            face_pose=face_pose,
         )
 
     # =========================================================
@@ -859,7 +1051,12 @@ class EventStore:
     ) -> list[PersonObservation]:
         """
         Retrieve all observations belonging to one image.
+
+        The supplied path is normalized to the canonical full-path image ID
+        used by the database. Relative paths remain supported for callers.
         """
+
+        image_id = self._canonical_image_id(image_id)
 
         cursor = self.connection.execute(
             """
@@ -895,7 +1092,12 @@ class EventStore:
                 body_embedding_dimension,
 
                 moment_id,
-                cluster_id
+                cluster_id,
+
+                face_yaw,
+                face_pitch,
+                face_roll,
+                face_pose
 
             FROM observations
 
@@ -960,7 +1162,12 @@ class EventStore:
                 body_embedding_dimension,
 
                 moment_id,
-                cluster_id
+                cluster_id,
+
+                face_yaw,
+                face_pitch,
+                face_roll,
+                face_pose
 
             FROM observations
 
@@ -1165,9 +1372,9 @@ class EventStore:
         """
         Add images to the processing queue.
 
-        Existing image IDs are ignored because image_id is UNIQUE.
-
-        This makes the operation safe to run again after restart.
+        Existing image IDs are ignored because the canonical full image
+        path is UNIQUE. Different directories may therefore contain files
+        with the same filename without colliding.
 
         Returns:
             Number of newly inserted jobs.
@@ -1181,7 +1388,12 @@ class EventStore:
 
                 image_path = Path(image_path)
 
-                image_id = image_path.name
+                # Canonicalize once and use the same value for BOTH fields.
+                # This prevents collisions between duplicate filenames in
+                # different directories and keeps job/observation identity
+                # consistent throughout the pipeline.
+                image_id = self._canonical_image_id(image_path)
+                image_path = Path(image_id)
 
                 cursor = self.connection.execute(
                     """
@@ -1273,6 +1485,60 @@ class EventStore:
         except Exception:
             self.connection.rollback()
             raise
+
+    # =========================================================
+    # Retry failed image jobs
+    # =========================================================
+
+    def retry_failed_image_jobs(self) -> int:
+        """
+        Move images that failed on their first attempt back to
+        PENDING so they receive one additional processing attempt.
+
+        Only jobs with attempts == 1 are retried. This guarantees
+        that an image is never retried more than once by this
+        mechanism. Jobs that fail again remain FAILED.
+        """
+        try:
+            cursor = self.connection.execute("""
+                UPDATE image_jobs
+                SET
+                    status = 'PENDING',
+                    worker_id = NULL,
+                    started_at = NULL,
+                    completed_at = NULL,
+                    error_message = NULL
+                WHERE status = 'FAILED' AND attempts = 1
+                """)
+            self.connection.commit()
+            return int(cursor.rowcount)
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    # =========================================================
+    # Get failed image jobs
+    # =========================================================
+
+    def get_failed_image_jobs(self) -> list[dict]:
+        """Return image jobs that are still FAILED."""
+        cursor = self.connection.execute("""
+            SELECT job_id, image_id, image_path, attempts, error_message
+            FROM image_jobs
+            WHERE status = 'FAILED'
+            ORDER BY job_id
+            """)
+        rows = cursor.fetchall()
+        return [
+            {
+                "job_id": int(row[0]),
+                "image_id": str(row[1]),
+                "image_path": str(row[2]),
+                "attempts": int(row[3]),
+                "error_message": row[4],
+            }
+            for row in rows
+        ]
 
     # =========================================================
     # Claim next image job

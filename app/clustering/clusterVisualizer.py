@@ -11,7 +11,6 @@ Output structure:
 ├── representatives/
 │   ├── cluster_000.jpg
 │   ├── cluster_001.jpg
-│   ├── cluster_002.jpg
 │   └── ...
 │
 ├── cluster_000/
@@ -54,15 +53,6 @@ from app.models.observation import PersonObservation
 # Configuration
 # ============================================================
 
-# How much area around the detected face should be included.
-#
-# 0.25 means:
-#
-#     face width  = 100 px
-#     padding     = 25 px on each side
-#
-# This keeps the representative from being an excessively
-# tight crop while still showing only the person's head/face.
 FACE_PADDING_RATIO = 0.25
 
 
@@ -75,95 +65,66 @@ def build_image_index(
     event_path: str | Path,
 ) -> dict[str, Path]:
     """
-    Build an index:
+    Build a full-path image index.
 
-        image filename -> full image path
-
-    The current main.py stores image_id using:
-
-        os.path.basename(image_path)
-
-    therefore the filename is the correct lookup key.
+    The current EventStore uses the canonical absolute path as image_id,
+    so the index must use the same identity. Basenames are intentionally
+    not used as the primary key because duplicate filenames are allowed.
     """
 
-    event_path = Path(event_path)
-
+    event_path = Path(event_path).resolve(strict=False)
     image_index: dict[str, Path] = {}
 
-    valid_extensions = {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".bmp",
-        ".webp",
-        ".tif",
-        ".tiff",
-    }
+    valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
-    for path in event_path.iterdir():
-
+    for path in event_path.rglob("*"):
         if not path.is_file():
             continue
-
         if path.suffix.lower() not in valid_extensions:
             continue
 
-        image_index[path.name] = path
+        canonical = path.resolve(strict=False)
+        image_index[str(canonical)] = canonical
 
+    print(f"Indexed {len(image_index)} image file(s) recursively.")
     return image_index
 
 
-# ============================================================
-# Bounding box helpers
-# ============================================================
+def resolve_source_image(
+    image_id: str,
+    event_path: str | Path,
+    image_index: dict[str, Path],
+) -> Optional[Path]:
+    """Resolve a stored image_id to the exact source image."""
+    candidate = Path(str(image_id))
 
+    if candidate.is_file():
+        return candidate.resolve(strict=False)
 
-def _clamp_bbox(
-    bbox,
-    image_width: int,
-    image_height: int,
-) -> tuple[int, int, int, int]:
-    """
-    Clamp a bounding box so that it stays inside the image.
-    """
+    event_path = Path(event_path).resolve(strict=False)
+    canonical = str(candidate.resolve(strict=False))
+    indexed = image_index.get(canonical)
+    if indexed is not None and indexed.is_file():
+        return indexed
 
-    x1 = max(
-        0,
-        min(
-            int(bbox.x1),
-            image_width - 1,
-        ),
-    )
+    relative = event_path / candidate
+    if relative.is_file():
+        return relative.resolve(strict=False)
 
-    y1 = max(
-        0,
-        min(
-            int(bbox.y1),
-            image_height - 1,
-        ),
-    )
+    basename = candidate.name
+    matches = [
+        path
+        for path in image_index.values()
+        if path.name == basename and path.is_file()
+    ]
+    if len(matches) == 1:
+        return matches[0]
 
-    x2 = max(
-        0,
-        min(
-            int(bbox.x2),
-            image_width,
-        ),
-    )
-
-    y2 = max(
-        0,
-        min(
-            int(bbox.y2),
-            image_height,
-        ),
-    )
-
-    return x1, y1, x2, y2
+    return None
 
 
 # ============================================================
-# Face crop
+# Crop face
 # ============================================================
 
 
@@ -172,88 +133,42 @@ def crop_face(
     observation: PersonObservation,
 ) -> Optional[np.ndarray]:
     """
-    Crop ONLY the detected face.
+    Crop the detected face from an observation with padding.
 
-    IMPORTANT:
-
-    This function deliberately uses:
-
-        observation.face_bbox
-
-    and NOT:
-
-        observation.person_bbox
-
-    Therefore the representative image contains the person's
-    face/head only.
-
-    A small amount of padding is added around the detected face.
+    Returns None when the image or face bounding box is invalid.
     """
-
     if image is None or image.size == 0:
         return None
 
-    if observation.face_bbox is None:
+    bbox = observation.face_bbox
+    if bbox is None:
         return None
 
     image_height, image_width = image.shape[:2]
 
-    # --------------------------------------------------------
-    # Get face bounding box.
-    # --------------------------------------------------------
-
-    x1, y1, x2, y2 = _clamp_bbox(
-        observation.face_bbox,
-        image_width=image_width,
-        image_height=image_height,
-    )
+    x1 = int(bbox.x1)
+    y1 = int(bbox.y1)
+    x2 = int(bbox.x2)
+    y2 = int(bbox.y2)
 
     if x2 <= x1 or y2 <= y1:
         return None
 
-    # --------------------------------------------------------
-    # Calculate face dimensions.
-    # --------------------------------------------------------
-
     face_width = x2 - x1
     face_height = y2 - y1
 
-    # --------------------------------------------------------
-    # Add padding.
-    # --------------------------------------------------------
-
     padding_x = int(face_width * FACE_PADDING_RATIO)
-
     padding_y = int(face_height * FACE_PADDING_RATIO)
 
-    x1 = max(
-        0,
-        x1 - padding_x,
-    )
+    x1 = max(0, x1 - padding_x)
+    y1 = max(0, y1 - padding_y)
+    x2 = min(image_width, x2 + padding_x)
+    y2 = min(image_height, y2 + padding_y)
 
-    y1 = max(
-        0,
-        y1 - padding_y,
-    )
+    if x2 <= x1 or y2 <= y1:
+        return None
 
-    x2 = min(
-        image_width,
-        x2 + padding_x,
-    )
-
-    y2 = min(
-        image_height,
-        y2 + padding_y,
-    )
-
-    # --------------------------------------------------------
-    # Crop.
-    # --------------------------------------------------------
-
-    face = image[
-        y1:y2,
-        x1:x2,
-    ]
+    face = image[y1:y2, x1:x2]
 
     if face.size == 0:
         return None
@@ -279,27 +194,13 @@ def calculate_representative_score(
 
         70% -> face quality
         30% -> face detection confidence
-
-    The face embedding must also be valid.
     """
-
-    # --------------------------------------------------------
-    # A representative must have a valid face embedding.
-    # --------------------------------------------------------
 
     if not observation.face_embedding_valid:
         return -1.0
 
-    # --------------------------------------------------------
-    # A representative must have a face bounding box.
-    # --------------------------------------------------------
-
     if observation.face_bbox is None:
         return -1.0
-
-    # --------------------------------------------------------
-    # Face quality.
-    # --------------------------------------------------------
 
     if observation.face_quality is not None:
 
@@ -309,10 +210,6 @@ def calculate_representative_score(
 
         face_quality = 0.0
 
-    # --------------------------------------------------------
-    # Face detection confidence.
-    # --------------------------------------------------------
-
     if observation.face_detection_confidence is not None:
 
         detection_confidence = float(observation.face_detection_confidence)
@@ -320,10 +217,6 @@ def calculate_representative_score(
     else:
 
         detection_confidence = 0.0
-
-    # --------------------------------------------------------
-    # Final representative score.
-    # --------------------------------------------------------
 
     score = 0.70 * face_quality + 0.30 * detection_confidence
 
@@ -338,18 +231,6 @@ def calculate_representative_score(
 def select_best_representative(
     cluster_observations: list[PersonObservation],
 ) -> Optional[PersonObservation]:
-    """
-    Select ONE observation from a cluster.
-
-    This function does NOT create any image.
-
-    It only decides:
-
-        "Which observation contains the best face
-         to represent this cluster?"
-
-    The actual face crop is created later.
-    """
 
     candidates = [
         observation
@@ -378,31 +259,8 @@ def save_cluster_representative(
     cluster_observations: list[PersonObservation],
     image_index: dict[str, Path],
     representatives_dir: Path,
+    event_path: str | Path,
 ) -> Optional[Path]:
-    """
-    Create exactly ONE representative image for a cluster.
-
-    Example:
-
-        Cluster 0:
-
-            IMG_1
-            IMG_3
-            IMG_5
-            IMG_7
-
-        If IMG_5 has the best face:
-
-            representatives/cluster_000.jpg
-
-        will contain ONLY the face cropped from IMG_5.
-
-    NO other images are placed inside this file.
-    """
-
-    # ========================================================
-    # Find the best observation.
-    # ========================================================
 
     best_observation = select_best_representative(cluster_observations)
 
@@ -412,11 +270,9 @@ def save_cluster_representative(
 
         return None
 
-    # ========================================================
-    # Find the original image.
-    # ========================================================
-
-    image_path = image_index.get(best_observation.image_id)
+    image_path = resolve_source_image(
+        best_observation.image_id, event_path, image_index
+    )
 
     if image_path is None:
 
@@ -428,9 +284,9 @@ def save_cluster_representative(
 
         return None
 
-    # ========================================================
-    # Load ONLY the selected original image.
-    # ========================================================
+    # --------------------------------------------------------
+    # Read the EXACT original image.
+    # --------------------------------------------------------
 
     image = cv2.imread(str(image_path))
 
@@ -439,10 +295,6 @@ def save_cluster_representative(
         print(f"[WARNING] Could not read image: " f"{image_path}")
 
         return None
-
-    # ========================================================
-    # Crop ONLY the selected face.
-    # ========================================================
 
     face = crop_face(
         image=image,
@@ -453,36 +305,15 @@ def save_cluster_representative(
 
         print(
             f"[WARNING] Could not crop face from "
-            f"observation {best_observation.observation_id}."
+            f"observation "
+            f"{best_observation.observation_id}."
         )
 
         del image
 
         return None
 
-    # ========================================================
-    # Output path.
-    # ========================================================
-
     output_path = representatives_dir / f"cluster_{cluster_id:03d}.jpg"
-
-    # ========================================================
-    # SAVE THE FACE DIRECTLY.
-    #
-    # This is the critical part.
-    #
-    # `face` contains ONE cropped face.
-    #
-    # We do NOT:
-    #
-    #     - create tiles
-    #     - create contact sheets
-    #     - combine images
-    #     - concatenate faces
-    #     - draw other observations
-    #
-    # We simply save this one face crop.
-    # ========================================================
 
     success = cv2.imwrite(
         str(output_path),
@@ -498,10 +329,6 @@ def save_cluster_representative(
 
         return None
 
-    # ========================================================
-    # Logging.
-    # ========================================================
-
     score = calculate_representative_score(best_observation)
 
     print(f"  Cluster {cluster_id} representative:")
@@ -509,6 +336,8 @@ def save_cluster_representative(
     print(f"      observation : " f"{best_observation.observation_id}")
 
     print(f"      source image: " f"{best_observation.image_id}")
+
+    print(f"      source path : " f"{image_path}")
 
     print(
         f"      face quality: " f"{float(best_observation.face_quality):.3f}"
@@ -540,29 +369,39 @@ def copy_cluster_images(
     cluster_observations: list[PersonObservation],
     image_index: dict[str, Path],
     output_dir: Path,
+    event_path: str | Path,
 ) -> Path:
     """
-    Copy the ORIGINAL images into their cluster folder.
+    Copy the ORIGINAL image files into their cluster folder.
 
-    Example:
+    IMPORTANT:
 
-        cluster_000/
-            IMG_1.jpg
-            IMG_3.jpg
-            IMG_5.jpg
-            IMG_7.jpg
+    The original folder structure is NOT reproduced.
 
-    These are the original full images.
+    Example source:
 
-    They are completely separate from:
+        EVENT_PATH/
+            camera_1/
+                morning/
+                    IMG_001.jpg
 
-        representatives/cluster_000.jpg
+    Destination:
 
-    which contains ONLY the best face.
+        cluster_visualization/
+            cluster_000/
+                IMG_001.jpg
+
+    Only the actual image file is copied.
+
+    The destination is deliberately constructed as:
+
+        cluster_dir / image_path.name
+
+    rather than using the complete source path.
     """
 
     # --------------------------------------------------------
-    # Determine folder.
+    # Determine destination folder.
     # --------------------------------------------------------
 
     if cluster_id is None:
@@ -579,12 +418,7 @@ def copy_cluster_images(
     )
 
     # --------------------------------------------------------
-    # Keep track of copied images.
-    #
-    # An image can contain multiple people.
-    #
-    # We only copy the original image once inside the same
-    # cluster folder.
+    # Keep track of images already copied.
     # --------------------------------------------------------
 
     copied_images: set[str] = set()
@@ -596,7 +430,11 @@ def copy_cluster_images(
         if image_id in copied_images:
             continue
 
-        image_path = image_index.get(image_id)
+        # ----------------------------------------------------
+        # Find the EXACT source image.
+        # ----------------------------------------------------
+
+        image_path = resolve_source_image(image_id, event_path, image_index)
 
         if image_path is None:
 
@@ -604,9 +442,37 @@ def copy_cluster_images(
 
             continue
 
+        # ====================================================
+        # IMPORTANT
+        #
+        # ONLY THE IMAGE NAME is used here.
+        #
+        # We do NOT do:
+        #
+        #     cluster_dir / image_path
+        #
+        # because that could reproduce the complete source
+        # directory structure.
+        #
+        # Instead:
+        #
+        #     image_path.name
+        #
+        # gives only:
+        #
+        #     IMG_001.jpg
+        #
+        # ====================================================
+
         destination = cluster_dir / image_path.name
 
         try:
+
+            # ------------------------------------------------
+            # copy2 copies the actual file.
+            #
+            # It does NOT copy the parent folders.
+            # ------------------------------------------------
 
             shutil.copy2(
                 image_path,
@@ -614,6 +480,8 @@ def copy_cluster_images(
             )
 
             copied_images.add(image_id)
+
+            print(f"  Copied image: " f"{image_path.name}")
 
         except Exception as exc:
 
@@ -638,41 +506,12 @@ def visualizeClusters(
     """
     Create visual validation output.
 
-    IMPORTANT:
+    There are NO contact sheets.
 
-    `columns` and `max_items_per_cluster` are kept in the
-    function signature for compatibility with existing code,
-    but they are NOT used to create contact sheets.
+    Each cluster contains the original image files.
 
-    There are NO contact sheets in this version.
-
-    Output:
-
-        cluster_visualization/
-        │
-        ├── representatives/
-        │   ├── cluster_000.jpg
-        │   ├── cluster_001.jpg
-        │   └── ...
-        │
-        ├── cluster_000/
-        │   ├── IMG_1.jpg
-        │   ├── IMG_3.jpg
-        │   ├── IMG_5.jpg
-        │   └── IMG_7.jpg
-        │
-        ├── cluster_001/
-        │   └── ...
-        │
-        └── noise/
-            └── ...
-
-    Each representative file is ONE face crop.
+    Representatives contain exactly ONE cropped face.
     """
-
-    # ========================================================
-    # Prepare paths.
-    # ========================================================
 
     event_path = Path(event_path)
 
@@ -721,7 +560,7 @@ def visualizeClusters(
     print()
 
     # ========================================================
-    # Build image index.
+    # Build recursive image index.
     # ========================================================
 
     image_index = build_image_index(event_path)
@@ -782,7 +621,10 @@ def visualizeClusters(
         # ====================================================
         # STEP 1
         #
-        # Copy the ORIGINAL images into the cluster folder.
+        # Copy ORIGINAL images.
+        #
+        # Only the image file is copied.
+        # The source directory structure is NOT copied.
         # ====================================================
 
         cluster_folder = copy_cluster_images(
@@ -790,6 +632,7 @@ def visualizeClusters(
             cluster_observations=cluster_observations,
             image_index=image_index,
             output_dir=output_dir,
+            event_path=event_path,
         )
 
         # ====================================================
@@ -807,6 +650,7 @@ def visualizeClusters(
                 cluster_observations=cluster_observations,
                 image_index=image_index,
                 representatives_dir=representatives_dir,
+                event_path=event_path,
             )
 
             if representative_path is not None:
@@ -815,6 +659,7 @@ def visualizeClusters(
 
         # ====================================================
         # STEP 3
+        # Logging.
         # ====================================================
 
         unique_images = len(

@@ -113,6 +113,21 @@ FACE_SHARPNESS_MIN = 20.0
 
 FACE_SHARPNESS_MAX = 150.0
 
+# ============================================================
+# SAME-IMAGE DUPLICATE SUPPRESSION
+# ============================================================
+
+# A duplicate observation must have a very high face similarity.
+# This is intentionally stricter than normal identity clustering.
+SAME_IMAGE_DUPLICATE_FACE_SIMILARITY = 0.82
+
+# The person detections must also overlap meaningfully.
+SAME_IMAGE_DUPLICATE_PERSON_IOU = 0.35
+
+# Or, when person boxes are not very similar, the face boxes may
+# provide the required geometric overlap.
+SAME_IMAGE_DUPLICATE_FACE_IOU = 0.30
+
 
 # ============================================================
 # BODY QUALITY
@@ -184,6 +199,55 @@ MIN_CLUSTER_SIZE = 2
 # Number of strongest observations considered when
 # representing a cluster.
 REPRESENTATIVE_COUNT = 3
+
+
+# ============================================================
+# BEST IMAGE SELECTION
+# ============================================================
+
+# Maximum number of best source images selected for each identity.
+BEST_IMAGES_PER_CLUSTER = 5
+
+# Prefer pose diversity when good candidates are available.
+BEST_IMAGES_REQUIRE_POSE_DIVERSITY = True
+
+
+# ============================================================
+# FACE POSE / CROSS-POSE IDENTITY MATCHING
+# ============================================================
+
+# Coarse head-pose classification from InsightFace 5-point landmarks.
+FACE_POSE_FRONTAL_YAW_DEGREES = 20.0
+FACE_POSE_PROFILE_YAW_DEGREES = 55.0
+
+# Cross-pose matching is intentionally more permissive than
+# same-pose matching, but still requires supporting evidence.
+CROSS_POSE_MIN_FACE_SIMILARITY = 0.42
+CROSS_POSE_MIN_BODY_SIMILARITY = 0.45
+CROSS_POSE_MERGE_THRESHOLD = 0.66
+
+# Keep pose-diverse cluster representatives.
+MAX_REPRESENTATIVES_PER_POSE = 2
+
+# ============================================================
+# IDENTITY ANCHOR RULE
+# ============================================================
+#
+# A cluster may only become a discovered identity when it contains
+# at least one trusted full-face anchor. The anchor is deliberately
+# stricter than a normal valid face observation.
+#
+# The current implementation uses frontal pose + face quality +
+# detection confidence + minimum face resolution as the practical
+# definition of a clear full face.
+#
+# Side/profile observations can expand an anchored identity, but
+# side/profile-only observations cannot create an identity cluster
+# by themselves.
+ANCHOR_MIN_FACE_QUALITY = 0.70
+ANCHOR_MIN_FACE_DETECTION_CONFIDENCE = 0.70
+ANCHOR_MIN_FACE_SIZE = 60
+ANCHOR_MAX_YAW_DEGREES = 20.0
 
 
 # ============================================================
@@ -259,3 +323,28 @@ WORKER_STALE_TIMEOUT_SECONDS = 600
 #
 # Recommended for the current ML pipeline.
 WORKER_USE_PROCESSES = True
+
+
+# ============================================================
+# FINAL EVENT OUTPUT
+# ============================================================
+
+# Supported modes:
+#
+#   CLUSTERING_ONLY
+#       clusterXX/allImages/
+#
+#   BEST_IMAGES_ONLY
+#       clusterXX/bestImages/
+#
+#   BOTH
+#       clusterXX/allImages/
+#       clusterXX/bestImages/
+#
+EVENT_OUTPUT_MODE = "BOTH"
+
+# Folder created inside each event directory.
+EVENT_OUTPUT_DIRECTORY_NAME = "output"
+
+# Remove the previous generated output before writing a new result.
+EVENT_OUTPUT_CLEAN_BEFORE_RUN = True

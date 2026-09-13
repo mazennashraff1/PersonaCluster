@@ -13,6 +13,8 @@ from app.clustering.clusterVisualizer import visualizeClusters
 from app.clustering.constrainedClustering import (
     ConstrainedIdentityClustering,
 )
+from app.selection.bestImageSelector import BestImageSelector
+from app.output.eventOutputManager import EventOutputManager
 from app.storage.eventStore import EventStore
 from app.workers.imageWorker import run_image_worker
 
@@ -20,7 +22,7 @@ from app.workers.imageWorker import run_image_worker
 # Configuration
 # ============================================================
 
-EVENT_PATH = Path(config.EVENTS_PATH)
+EVENT_PATH = Path(config.EVENTS_PATH).resolve()
 
 
 # ============================================================
@@ -32,7 +34,25 @@ def get_image_paths(
     event_path: str | Path,
 ):
     """
-    Yield image paths from the event directory.
+    Recursively yield image paths from the event directory.
+
+    Every subfolder is searched until an actual image file
+    is found.
+
+    Example:
+
+        EVENT_PATH/
+        ├── folder1/
+        │   ├── image1.jpg
+        │   └── subfolder/
+        │       └── image2.jpg
+        │
+        ├── folder2/
+        │   └── image3.png
+        │
+        └── image4.jpg
+
+    All four images will be discovered.
 
     Images are yielded one at a time rather than creating a
     large list in memory.
@@ -50,19 +70,32 @@ def get_image_paths(
         ".tiff",
     }
 
-    with os.scandir(event_path) as entries:
+    # --------------------------------------------------------
+    # rglob("*") recursively walks through ALL subdirectories.
+    #
+    # We only yield actual files with supported image
+    # extensions.
+    # --------------------------------------------------------
 
-        for entry in entries:
+    for image_path in event_path.rglob("*"):
 
-            if not entry.is_file():
-                continue
+        if not image_path.is_file():
+            continue
 
-            extension = os.path.splitext(entry.name)[1].lower()
+        if image_path.suffix.lower() not in valid_extensions:
+            continue
 
-            if extension not in valid_extensions:
-                continue
+        # ----------------------------------------------------
+        # Yield the EXACT image path.
+        #
+        # Example:
+        #
+        # EVENT_PATH/folder1/subfolder/image2.jpg
+        #
+        # The worker receives that exact file.
+        # ----------------------------------------------------
 
-            yield entry.path
+        yield image_path.resolve()
 
 
 # ============================================================
@@ -74,7 +107,8 @@ def prepare_image_jobs(
     event_store: EventStore,
 ) -> int:
     """
-    Discover event images and create their processing jobs.
+    Discover event images recursively and create their
+    processing jobs.
 
     Existing jobs are ignored because image_id is UNIQUE.
 
@@ -133,7 +167,7 @@ def run_workers() -> None:
     print("STARTING IMAGE WORKERS")
     print("=" * 60)
 
-    print(f"Configured workers: " f"{worker_count}")
+    print(f"Configured workers: {worker_count}")
 
     print(
         f"Worker mode: " f"{'PROCESSES' if config.WORKER_USE_PROCESSES else 'THREADS'}"
@@ -202,7 +236,7 @@ def run_workers() -> None:
         worker_time = time.perf_counter() - worker_start
 
         print()
-        print(f"All workers finished " f"in {worker_time:.2f}s")
+        print(f"All workers finished in {worker_time:.2f}s")
 
         # ----------------------------------------------------
         # Check worker exit codes.
@@ -224,7 +258,7 @@ def run_workers() -> None:
         if crashed_workers:
 
             print()
-            print("[WARNING] Some worker " "processes exited unexpectedly:")
+            print("[WARNING] Some worker processes exited unexpectedly:")
 
             for worker_name, exit_code in crashed_workers:
 
@@ -383,7 +417,7 @@ def run_constrained_clustering(
     event_store.save_cluster_assignments(assignments)
 
     print()
-    print("Cluster assignments saved " "to database.")
+    print("Cluster assignments saved to database.")
 
     return observations, assignments
 
@@ -400,24 +434,26 @@ def main():
     Responsibilities:
 
         1. Open event database
-        2. Create image jobs
-        3. Recover stale jobs
-        4. Start workers
-        5. Wait for workers
-        6. Verify job state
-        7. Run event-level clustering
-        8. Run visualization
+        2. Recursively discover images
+        3. Create image jobs
+        4. Recover stale jobs
+        5. Start workers
+        6. Wait for workers
+        7. Retry failed images once
+        8. Verify final job state
+        9. Run event-level clustering
+        10. Run visualization
     """
 
     program_start = time.perf_counter()
 
     print("=" * 60)
-    print("STARTING EVENT PERSON " "IDENTITY PIPELINE")
+    print("STARTING EVENT PERSON IDENTITY PIPELINE")
     print("=" * 60)
 
     print(f"Event path: {EVENT_PATH}")
 
-    print(f"Worker count: " f"{config.WORKER_COUNT}")
+    print(f"Worker count: {config.WORKER_COUNT}")
 
     print(f"Worker mode: " f"{'PROCESS' if config.WORKER_USE_PROCESSES else 'THREAD'}")
 
@@ -470,7 +506,7 @@ def main():
 
         # ====================================================
         # PHASE 2.5
-        # Check queue state
+        # Check first worker results
         # ====================================================
 
         counts = print_job_statistics(event_store)
@@ -484,19 +520,43 @@ def main():
 
         if counts["PROCESSING"] > 0:
 
-            print()
-            print(
-                "[WARNING] "
-                f"{counts['PROCESSING']} job(s) "
-                "are still marked PROCESSING."
+            raise RuntimeError(
+                "Image processing did not finish cleanly. "
+                "PROCESSING jobs remain in the database."
             )
 
-            print("They were not included in " "the completed worker result.")
+        # ====================================================
+        # PHASE 2.6
+        # Retry failed images once
+        # ====================================================
 
-            # ------------------------------------------------
-            # Do NOT blindly run clustering as if all images
-            # were processed.
-            # ------------------------------------------------
+        if counts["FAILED"] > 0:
+
+            print()
+            print("=" * 60)
+            print("RETRYING FAILED IMAGES")
+            print("=" * 60)
+
+            print(
+                f"Found {counts['FAILED']} failed image(s). "
+                f"Retrying eligible images once."
+            )
+
+            retried = event_store.retry_failed_image_jobs()
+
+            print(f"Images queued for retry: " f"{retried}")
+
+            if retried > 0:
+
+                run_workers()
+
+                counts = print_job_statistics(event_store)
+
+        # ====================================================
+        # Final image-processing verification
+        # ====================================================
+
+        if counts["PROCESSING"] > 0:
 
             raise RuntimeError(
                 "Image processing did not finish cleanly. "
@@ -514,6 +574,28 @@ def main():
 
             raise RuntimeError("Not all image jobs were processed.")
 
+        final_failed_jobs = event_store.get_failed_image_jobs()
+
+        if final_failed_jobs:
+
+            print()
+            print("=" * 60)
+            print("IMAGES THAT FAILED AFTER RETRY")
+            print("=" * 60)
+
+            for failed_job in final_failed_jobs:
+
+                print(
+                    f"  {failed_job['image_id']} "
+                    f"(attempts={failed_job['attempts']})"
+                )
+
+                print(f"    Path: " f"{failed_job['image_path']}")
+
+                print(
+                    f"    Error: " f"{failed_job['error_message'] or 'Unknown error'}"
+                )
+
         # ====================================================
         # PHASE 3
         # Event-level constrained clustering
@@ -523,6 +605,81 @@ def main():
 
         # ====================================================
         # PHASE 4
+        # Best-image selection
+        # ====================================================
+
+        print()
+        print("=" * 60)
+        print("BEST IMAGE SELECTION")
+        print("=" * 60)
+
+        best_image_selector = BestImageSelector(
+            max_images_per_cluster=config.BEST_IMAGES_PER_CLUSTER,
+            min_pose_diversity=config.BEST_IMAGES_REQUIRE_POSE_DIVERSITY,
+        )
+
+        best_image_selections = best_image_selector.select(
+            observations=observations,
+            assignments=assignments,
+        )
+
+        for cluster_id, selection in best_image_selections.items():
+            print(
+                f"  Cluster {cluster_id}: "
+                f"selected {len(selection.candidates)} best image(s)"
+            )
+
+            for candidate in selection.candidates:
+                print(
+                    f"    - {candidate.image_id} "
+                    f"pose={candidate.pose} "
+                    f"score={candidate.score:.3f}"
+                )
+
+        # ====================================================
+        # PHASE 5
+        # Final event output
+        # ====================================================
+
+        # Build an image_id -> source path map from the same recursive
+        # discovery logic used when image jobs were created.
+        source_images: dict[str, Path] = {}
+        duplicate_source_ids: set[str] = set()
+
+        for image_path in get_image_paths(EVENT_PATH):
+            image_id = image_path.name
+            if image_id in source_images:
+                duplicate_source_ids.add(image_id)
+                continue
+            source_images[image_id] = image_path
+
+        if duplicate_source_ids:
+            print()
+            print("[WARNING] Duplicate image filenames were found in the event:")
+            for image_id in sorted(duplicate_source_ids):
+                print(f"  - {image_id}")
+            print(
+                "EventStore uses the filename as image_id, so duplicate filenames "
+                "cannot be distinguished by the current database design. "
+                "The first discovered path will be used for output."
+            )
+
+        output_manager = EventOutputManager(
+            event_path=EVENT_PATH,
+            output_directory_name=config.EVENT_OUTPUT_DIRECTORY_NAME,
+            mode=config.EVENT_OUTPUT_MODE,
+            clean_before_run=config.EVENT_OUTPUT_CLEAN_BEFORE_RUN,
+        )
+
+        output_directory = output_manager.write(
+            observations=observations,
+            assignments=assignments,
+            best_selections=best_image_selections,
+            source_images=source_images,
+        )
+
+        # ====================================================
+        # PHASE 5.5
         # Final visualization
         # ====================================================
 
@@ -548,6 +705,8 @@ def main():
 
         del observations
         del assignments
+        del best_image_selections
+        del output_directory
 
         gc.collect()
 

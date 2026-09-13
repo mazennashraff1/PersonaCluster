@@ -1107,7 +1107,11 @@ Install the requirements:
 ```bash
 pip install -r requirements.txt
 ```
+Then run:
 
+```bash
+python -m pip install --no-build-isolation git+https://github.com/KaiyangZhou/deep-person-reid.git
+```
 ---
 
 # 31. GPU Installation

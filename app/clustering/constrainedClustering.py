@@ -96,6 +96,21 @@ class ConstrainedIdentityClustering:
         self.merge_threshold = float(config.MERGE_THRESHOLD)
 
         self.min_face_similarity = float(config.MIN_FACE_SIMILARITY)
+        self.cross_pose_min_face_similarity = float(
+            config.CROSS_POSE_MIN_FACE_SIMILARITY
+        )
+        self.cross_pose_min_body_similarity = float(
+            config.CROSS_POSE_MIN_BODY_SIMILARITY
+        )
+        self.cross_pose_merge_threshold = float(config.CROSS_POSE_MERGE_THRESHOLD)
+        self.max_representatives_per_pose = int(config.MAX_REPRESENTATIVES_PER_POSE)
+
+        self.anchor_min_face_quality = float(config.ANCHOR_MIN_FACE_QUALITY)
+        self.anchor_min_face_detection_confidence = float(
+            config.ANCHOR_MIN_FACE_DETECTION_CONFIDENCE
+        )
+        self.anchor_min_face_size = int(config.ANCHOR_MIN_FACE_SIZE)
+        self.anchor_max_yaw_degrees = float(config.ANCHOR_MAX_YAW_DEGREES)
 
         self.min_cluster_size = int(config.MIN_CLUSTER_SIZE)
 
@@ -175,6 +190,24 @@ class ConstrainedIdentityClustering:
 
         if not -1.0 <= self.min_face_similarity <= 1.0:
             raise ValueError("MIN_FACE_SIMILARITY must be between -1 and 1.")
+        if not -1.0 <= self.cross_pose_min_face_similarity <= 1.0:
+            raise ValueError("CROSS_POSE_MIN_FACE_SIMILARITY must be between -1 and 1.")
+        if not -1.0 <= self.cross_pose_min_body_similarity <= 1.0:
+            raise ValueError("CROSS_POSE_MIN_BODY_SIMILARITY must be between -1 and 1.")
+        if not 0.0 <= self.cross_pose_merge_threshold <= 1.0:
+            raise ValueError("CROSS_POSE_MERGE_THRESHOLD must be between 0 and 1.")
+        if self.max_representatives_per_pose < 1:
+            raise ValueError("MAX_REPRESENTATIVES_PER_POSE must be at least 1.")
+        if not 0.0 <= self.anchor_min_face_quality <= 1.0:
+            raise ValueError("ANCHOR_MIN_FACE_QUALITY must be between 0 and 1.")
+        if not 0.0 <= self.anchor_min_face_detection_confidence <= 1.0:
+            raise ValueError(
+                "ANCHOR_MIN_FACE_DETECTION_CONFIDENCE must be between 0 and 1."
+            )
+        if self.anchor_min_face_size < 1:
+            raise ValueError("ANCHOR_MIN_FACE_SIZE must be at least 1.")
+        if not 0.0 <= self.anchor_max_yaw_degrees <= 90.0:
+            raise ValueError("ANCHOR_MAX_YAW_DEGREES must be between 0 and 90.")
 
         if self.min_cluster_size < 1:
             raise ValueError("MIN_CLUSTER_SIZE must be at least 1.")
@@ -477,66 +510,58 @@ class ConstrainedIdentityClustering:
     # Pair scoring
     # ============================================================
 
+    def _poses_are_cross_pose(
+        self,
+        first: PersonObservation,
+        second: PersonObservation,
+    ) -> bool:
+        first_pose = getattr(first, "face_pose", None)
+        second_pose = getattr(second, "face_pose", None)
+        known = {"frontal", "left", "right", "profile"}
+        return (
+            first_pose in known and second_pose in known and first_pose != second_pose
+        )
+
     def pair_score(
         self,
         first: PersonObservation,
         second: PersonObservation,
     ) -> Optional[float]:
-        """
-        Public pair scoring method.
-
-        The actual scoring formula is intentionally identical
-        to the original implementation.
-        """
-
         face_similarity = self._cosine_similarity(
-            first.face_embedding,
-            second.face_embedding,
+            first.face_embedding, second.face_embedding
         )
-
         if face_similarity is None:
             return None
 
-        # --------------------------------------------------------
-        # Hard face gate.
-        # --------------------------------------------------------
-
-        if face_similarity < self.min_face_similarity:
-            return None
-
+        cross_pose = self._poses_are_cross_pose(first, second)
         quality_score = (self._quality_score(first) + self._quality_score(second)) / 2.0
 
         body_similarity: Optional[float] = None
-
         if first.body_embedding_valid and second.body_embedding_valid:
-
             body_similarity = self._cosine_similarity(
-                first.body_embedding,
-                second.body_embedding,
+                first.body_embedding, second.body_embedding
             )
+
+        if cross_pose:
+            if face_similarity < self.cross_pose_min_face_similarity:
+                return None
+            if (
+                body_similarity is not None
+                and face_similarity < self.min_face_similarity
+                and body_similarity < self.cross_pose_min_body_similarity
+            ):
+                return None
+        elif face_similarity < self.min_face_similarity:
+            return None
 
         if body_similarity is not None:
-
-            # ----------------------------------------------------
-            # Convert cosine [-1, 1] to [0, 1].
-            # ----------------------------------------------------
-
-            body_score = float(
-                np.clip(
-                    (body_similarity + 1.0) / 2.0,
-                    0.0,
-                    1.0,
-                )
-            )
-
+            body_score = float(np.clip((body_similarity + 1.0) / 2.0, 0.0, 1.0))
             score = (
                 self.face_weight * face_similarity
                 + self.body_weight * body_score
                 + self.quality_weight * quality_score
             )
-
         else:
-
             score = (
                 self.face_only_weight * face_similarity
                 + self.face_only_quality_weight * quality_score
@@ -544,14 +569,10 @@ class ConstrainedIdentityClustering:
 
         if not np.isfinite(score):
             return None
-
-        return float(
-            np.clip(
-                score,
-                0.0,
-                1.0,
-            )
-        )
+        score = float(np.clip(score, 0.0, 1.0))
+        if cross_pose and score < self.cross_pose_merge_threshold:
+            return None
+        return score
 
     # ============================================================
     # Cached pair scoring
@@ -562,116 +583,62 @@ class ConstrainedIdentityClustering:
         first: PersonObservation,
         second: PersonObservation,
     ) -> Optional[float]:
-        """
-        Performance-optimized version of pair_score().
-
-        IMPORTANT:
-
-        The mathematical formula is the same as pair_score().
-
-        The difference is that normalized embeddings and quality
-        values have already been calculated and are reused.
-        """
-
         first_id = first.observation_id
         second_id = second.observation_id
-
         first_face = self._face_embedding_cache.get(first_id)
-
         second_face = self._face_embedding_cache.get(second_id)
-
-        if first_face is None or second_face is None:
+        if (
+            first_face is None
+            or second_face is None
+            or first_face.shape != second_face.shape
+        ):
             return None
 
-        if first_face.shape != second_face.shape:
-            return None
-
-        face_similarity = float(
-            np.dot(
-                first_face,
-                second_face,
-            )
-        )
-
+        face_similarity = float(np.dot(first_face, second_face))
         if not np.isfinite(face_similarity):
             return None
+        face_similarity = float(np.clip(face_similarity, -1.0, 1.0))
 
-        face_similarity = float(
-            np.clip(
-                face_similarity,
-                -1.0,
-                1.0,
-            )
-        )
-
-        # --------------------------------------------------------
-        # Hard face gate.
-        # --------------------------------------------------------
-
-        if face_similarity < self.min_face_similarity:
-            return None
-
+        cross_pose = self._poses_are_cross_pose(first, second)
         quality_score = (
             self._quality_cache[first_id] + self._quality_cache[second_id]
         ) / 2.0
 
         body_similarity: Optional[float] = None
-
         if first.body_embedding_valid and second.body_embedding_valid:
-
             first_body = self._body_embedding_cache.get(first_id)
-
             second_body = self._body_embedding_cache.get(second_id)
-
             if (
                 first_body is not None
                 and second_body is not None
                 and first_body.shape == second_body.shape
             ):
-
-                body_similarity = float(
-                    np.dot(
-                        first_body,
-                        second_body,
-                    )
-                )
-
+                body_similarity = float(np.dot(first_body, second_body))
                 if np.isfinite(body_similarity):
-
-                    body_similarity = float(
-                        np.clip(
-                            body_similarity,
-                            -1.0,
-                            1.0,
-                        )
-                    )
-
+                    body_similarity = float(np.clip(body_similarity, -1.0, 1.0))
                 else:
-
                     body_similarity = None
 
+        if cross_pose:
+            if face_similarity < self.cross_pose_min_face_similarity:
+                return None
+            if (
+                body_similarity is not None
+                and face_similarity < self.min_face_similarity
+                and body_similarity < self.cross_pose_min_body_similarity
+            ):
+                return None
+        elif face_similarity < self.min_face_similarity:
+            return None
+
         if body_similarity is not None:
-
-            # ----------------------------------------------------
-            # Same body conversion as original implementation.
-            # ----------------------------------------------------
-
-            body_score = float(
-                np.clip(
-                    (body_similarity + 1.0) / 2.0,
-                    0.0,
-                    1.0,
-                )
-            )
-
+            body_score = float(np.clip((body_similarity + 1.0) / 2.0, 0.0, 1.0))
             score = (
                 self.face_weight * face_similarity
                 + self.body_weight * body_score
                 + self.quality_weight * quality_score
             )
-
         else:
-
             score = (
                 self.face_only_weight * face_similarity
                 + self.face_only_quality_weight * quality_score
@@ -679,14 +646,10 @@ class ConstrainedIdentityClustering:
 
         if not np.isfinite(score):
             return None
-
-        return float(
-            np.clip(
-                score,
-                0.0,
-                1.0,
-            )
-        )
+        score = float(np.clip(score, 0.0, 1.0))
+        if cross_pose and score < self.cross_pose_merge_threshold:
+            return None
+        return score
 
     # ============================================================
     # Cluster representatives
@@ -696,41 +659,140 @@ class ConstrainedIdentityClustering:
         self,
         observation: PersonObservation,
     ) -> float:
-
         return self._quality_score(observation)
 
     def _cluster_representatives(
         self,
         cluster: IdentityCluster,
     ) -> list[PersonObservation]:
-        """
-        Return the strongest observations in the cluster.
-
-        Results are cached until this cluster changes.
-        """
-
         cached = self._representative_cache.get(cluster.cluster_id)
-
         if cached is not None:
             return cached
 
         ranked = sorted(
             cluster.observations,
             key=lambda observation: (
+                -int(self._is_trusted_anchor(observation)),
                 -self._representative_score(observation),
                 observation.observation_id,
             ),
         )
 
-        representatives = ranked[: self.representative_count]
+        selected: list[PersonObservation] = []
+        selected_ids: set[int] = set()
+        pose_counts: dict[str, int] = {}
 
-        self._representative_cache[cluster.cluster_id] = representatives
+        # Always keep a trusted anchor in the identity profile when one exists.
+        for observation in ranked:
+            if not self._is_trusted_anchor(observation):
+                continue
+            selected.append(observation)
+            selected_ids.add(observation.observation_id)
+            pose = getattr(observation, "face_pose", None) or "unknown"
+            pose_counts[pose] = pose_counts.get(pose, 0) + 1
+            break
 
-        return representatives
+        # Prefer pose diversity for the remaining slots.
+        for observation in ranked:
+            if observation.observation_id in selected_ids:
+                continue
+
+            pose = getattr(observation, "face_pose", None) or "unknown"
+            if (
+                pose != "unknown"
+                and pose_counts.get(pose, 0) >= self.max_representatives_per_pose
+            ):
+                continue
+
+            selected.append(observation)
+            selected_ids.add(observation.observation_id)
+            pose_counts[pose] = pose_counts.get(pose, 0) + 1
+
+            if len(selected) >= self.representative_count:
+                break
+
+        # Fill remaining slots by quality.
+        if len(selected) < self.representative_count:
+            for observation in ranked:
+                if observation.observation_id in selected_ids:
+                    continue
+
+                pose = getattr(observation, "face_pose", None) or "unknown"
+                if pose_counts.get(pose, 0) >= self.max_representatives_per_pose:
+                    continue
+
+                selected.append(observation)
+                selected_ids.add(observation.observation_id)
+                pose_counts[pose] = pose_counts.get(pose, 0) + 1
+
+                if len(selected) >= self.representative_count:
+                    break
+
+        self._representative_cache[cluster.cluster_id] = selected
+        return selected
+
+    # ============================================================
+    # Identity anchor
+    # ============================================================
+
+    def _is_trusted_anchor(self, observation: PersonObservation) -> bool:
+        """Return True when an observation is strong enough to establish an identity."""
+        if not observation.face_embedding_valid:
+            return False
+        if observation.face_bbox is None:
+            return False
+        if getattr(observation, "face_pose", None) != "frontal":
+            return False
+
+        face_quality = float(observation.face_quality or 0.0)
+        detection_confidence = float(observation.face_detection_confidence or 0.0)
+        face_size = min(
+            int(observation.face_bbox.width),
+            int(observation.face_bbox.height),
+        )
+
+        if face_quality < self.anchor_min_face_quality:
+            return False
+        if detection_confidence < self.anchor_min_face_detection_confidence:
+            return False
+        if face_size < self.anchor_min_face_size:
+            return False
+
+        yaw = getattr(observation, "face_yaw", None)
+        if yaw is not None and abs(float(yaw)) > self.anchor_max_yaw_degrees:
+            return False
+
+        return True
+
+    def _cluster_has_trusted_anchor(self, cluster: IdentityCluster) -> bool:
+        """Return True when the candidate cluster contains a trusted anchor."""
+        return any(
+            self._is_trusted_anchor(observation) for observation in cluster.observations
+        )
 
     # ============================================================
     # Cluster compatibility
     # ============================================================
+
+    def _cluster_pair_uses_cross_pose(
+        self,
+        first: IdentityCluster,
+        second: IdentityCluster,
+        target_score: float,
+    ) -> bool:
+        """Return True when the representative pair producing target_score is cross-pose."""
+        for first_observation in self._cluster_representatives(first):
+            for second_observation in self._cluster_representatives(second):
+                if first_observation.image_id == second_observation.image_id:
+                    continue
+                score = self._cached_pair_score(first_observation, second_observation)
+                if score is None:
+                    continue
+                if abs(float(score) - float(target_score)) <= 1e-6:
+                    return self._poses_are_cross_pose(
+                        first_observation, second_observation
+                    )
+        return False
 
     def _cluster_pair_score(
         self,
@@ -777,19 +839,26 @@ class ConstrainedIdentityClustering:
     # Same-image constraint
     # ============================================================
 
-    @staticmethod
     def _can_merge(
+        self,
         first: IdentityCluster,
         second: IdentityCluster,
     ) -> bool:
         """
-        Hard identity constraint.
+        A merge is allowed only when:
+            1. The two clusters contain different source images.
+            2. At least one cluster already has a trusted full-face anchor.
 
-        Two clusters cannot merge if they contain observations
-        from the same source image.
+        This prevents side/profile-only observations from building an
+        identity cluster together. They can only expand an identity that
+        already has a trusted anchor.
         """
+        if not first.image_ids.isdisjoint(second.image_ids):
+            return False
 
-        return first.image_ids.isdisjoint(second.image_ids)
+        return self._cluster_has_trusted_anchor(
+            first
+        ) or self._cluster_has_trusted_anchor(second)
 
     # ============================================================
     # Heap helpers
@@ -1127,18 +1196,33 @@ class ConstrainedIdentityClustering:
                 break
 
             # ----------------------------------------------------
-            # The strongest compatible pair is still not good
-            # enough.
-            #
-            # Same stopping rule as original implementation.
+            # Apply the appropriate threshold. Cross-pose pairs use
+            # the controlled cross-pose threshold; same-pose pairs
+            # keep the original threshold.
             # ----------------------------------------------------
 
-            if best_score is None or best_score < self.merge_threshold:
-
-                rejected_low_similarity_merges += 1
+            if best_score is None:
                 break
 
             first_id, second_id = best_pair
+            first_cluster = clusters[first_id]
+            second_cluster = clusters[second_id]
+
+            is_cross_pose = self._cluster_pair_uses_cross_pose(
+                first_cluster,
+                second_cluster,
+                best_score,
+            )
+
+            required_threshold = (
+                self.cross_pose_merge_threshold
+                if is_cross_pose
+                else self.merge_threshold
+            )
+
+            if best_score < required_threshold:
+                rejected_low_similarity_merges += 1
+                break
 
             first_cluster = clusters[first_id]
 
@@ -1246,20 +1330,112 @@ class ConstrainedIdentityClustering:
                 )
 
         # ========================================================
-        # Convert surviving clusters into final compact IDs.
+        # Final identity validation / recovery
+        # ========================================================
+        #
+        # The merge constraint already prevents an anchorless cluster
+        # from being built from side/profile observations alone. This
+        # explicit final pass is a safety net and also handles any
+        # unexpected/legacy in-memory cluster state.
+
+        surviving_clusters = list(clusters.values())
+
+        anchored_clusters = [
+            cluster
+            for cluster in surviving_clusters
+            if self._cluster_has_trusted_anchor(cluster)
+            and cluster.size >= self.min_cluster_size
+        ]
+
+        invalid_observations: list[PersonObservation] = []
+        anchored_ids = {id(cluster) for cluster in anchored_clusters}
+
+        for cluster in surviving_clusters:
+            if id(cluster) not in anchored_ids:
+                invalid_observations.extend(cluster.observations)
+
+        def best_observation_to_cluster_score(
+            observation: PersonObservation,
+            target: IdentityCluster,
+        ) -> tuple[Optional[float], bool]:
+            best_score: Optional[float] = None
+            best_cross_pose = False
+
+            for representative in self._cluster_representatives(target):
+                if observation.image_id == representative.image_id:
+                    continue
+
+                score = self._cached_pair_score(
+                    observation,
+                    representative,
+                )
+                if score is None:
+                    continue
+
+                cross_pose = self._poses_are_cross_pose(
+                    observation,
+                    representative,
+                )
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_cross_pose = cross_pose
+
+            return best_score, best_cross_pose
+
+        # Dissolve invalid clusters and retry their observations against
+        # anchored identities one observation at a time. Never force a
+        # match when the evidence does not meet the relevant threshold.
+        for observation in invalid_observations:
+            best_target: Optional[IdentityCluster] = None
+            best_score: Optional[float] = None
+            best_cross_pose = False
+
+            for target in anchored_clusters:
+                if observation.image_id in target.image_ids:
+                    continue
+
+                score, cross_pose = best_observation_to_cluster_score(
+                    observation,
+                    target,
+                )
+                if score is None:
+                    continue
+
+                required_threshold = (
+                    self.cross_pose_merge_threshold
+                    if cross_pose
+                    else self.merge_threshold
+                )
+
+                if score < required_threshold:
+                    continue
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_target = target
+                    best_cross_pose = cross_pose
+
+            if best_target is not None:
+                best_target.observations.append(observation)
+                self._representative_cache.pop(
+                    best_target.cluster_id,
+                    None,
+                )
+
+        # ========================================================
+        # Convert surviving anchored clusters into final compact IDs.
         # ========================================================
 
         final_cluster_id = 0
         confirmed_cluster_count = 0
         clustered_observations = 0
 
-        # --------------------------------------------------------
-        # Stable ordering.
-        #
-        # Same as original implementation.
-        # --------------------------------------------------------
-
-        surviving_clusters = list(clusters.values())
+        surviving_clusters = [
+            cluster
+            for cluster in anchored_clusters
+            if cluster.size >= self.min_cluster_size
+        ]
 
         surviving_clusters.sort(
             key=lambda cluster: min(
@@ -1268,16 +1444,10 @@ class ConstrainedIdentityClustering:
         )
 
         for cluster in surviving_clusters:
-
-            if cluster.size < self.min_cluster_size:
-                continue
-
             confirmed_cluster_count += 1
 
             for observation in cluster.observations:
-
                 assignments[observation.observation_id] = final_cluster_id
-
                 clustered_observations += 1
 
             final_cluster_id += 1

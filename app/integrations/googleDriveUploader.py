@@ -390,7 +390,8 @@ class GoogleDriveUploader:
                 self.service.files()
                 .create(
                     body=metadata,
-                    fields="id,name",
+                    fields="id,name,webViewLink",
+                    supportsAllDrives=True,
                 )
                 .execute()
             )
@@ -439,6 +440,9 @@ class GoogleDriveUploader:
                     spaces="drive",
                     fields="files(id,name)",
                     pageSize=10,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="user",
                 )
                 .execute()
             )
@@ -559,6 +563,7 @@ class GoogleDriveUploader:
                     body=metadata,
                     media_body=media,
                     fields="id,name,webViewLink",
+                    supportsAllDrives=True,
                 )
                 .execute()
             )
@@ -582,26 +587,121 @@ class GoogleDriveUploader:
         folder.
         """
 
-        permission = {
-            "type": "anyone",
-            "role": self.public_link_role,
-        }
+        if self.public_link_role not in {"reader", "commenter", "writer"}:
+            raise ValueError(
+                "GOOGLE_DRIVE_PUBLIC_LINK_ROLE must be one of: "
+                "reader, commenter, writer"
+            )
 
-        print("[DRIVE] Making person folder editable by anyone with the link...")
+        print(
+            "[DRIVE] Configuring anyone-with-link permission for person folder "
+            f"({self.public_link_role})..."
+        )
 
-        self._execute_with_retry(
+        # A folder may already have an 'anyone' permission from a previous
+        # run (for example, reader). Update it instead of creating a second
+        # permission. This is important when upgrading from the old version.
+        response = self._execute_with_retry(
             lambda: (
                 self.service.permissions()
-                .create(
+                .list(
                     fileId=folder_id,
-                    body=permission,
-                    fields="id,type,role",
+                    fields="permissions(id,type,role,allowFileDiscovery)",
+                    supportsAllDrives=True,
                 )
                 .execute()
             )
         )
 
-        print(f"[DRIVE] Anyone-with-link {self.public_link_role} permission created.")
+        anyone_permission = next(
+            (
+                permission
+                for permission in response.get("permissions", [])
+                if permission.get("type") == "anyone"
+            ),
+            None,
+        )
+
+        if anyone_permission:
+            permission_id = anyone_permission["id"]
+
+            self._execute_with_retry(
+                lambda: (
+                    self.service.permissions()
+                    .update(
+                        fileId=folder_id,
+                        permissionId=permission_id,
+                        body={
+                            "role": self.public_link_role,
+                            "type": "anyone",
+                            "allowFileDiscovery": False,
+                        },
+                        fields="id,type,role,allowFileDiscovery",
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+            )
+
+            print(
+                f"[DRIVE] Existing anyone permission updated to "
+                f"{self.public_link_role}."
+            )
+        else:
+            self._execute_with_retry(
+                lambda: (
+                    self.service.permissions()
+                    .create(
+                        fileId=folder_id,
+                        body={
+                            "type": "anyone",
+                            "role": self.public_link_role,
+                            "allowFileDiscovery": False,
+                        },
+                        fields="id,type,role,allowFileDiscovery",
+                        supportsAllDrives=True,
+                        sendNotificationEmail=False,
+                    )
+                    .execute()
+                )
+            )
+
+            print(
+                f"[DRIVE] Anyone-with-link {self.public_link_role} permission created."
+            )
+
+        # Verify that Drive actually stored the requested permission.
+        verify = self._execute_with_retry(
+            lambda: (
+                self.service.permissions()
+                .list(
+                    fileId=folder_id,
+                    fields="permissions(id,type,role,allowFileDiscovery)",
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+        )
+
+        verified = next(
+            (
+                permission
+                for permission in verify.get("permissions", [])
+                if permission.get("type") == "anyone"
+            ),
+            None,
+        )
+
+        if not verified or verified.get("role") != self.public_link_role:
+            raise RuntimeError(
+                "Google Drive did not confirm the requested anyone-with-link "
+                f"permission ({self.public_link_role}) for folder {folder_id}."
+            )
+
+        print(
+            f"[DRIVE] VERIFIED: anyone with the link can "
+            f"{self.public_link_role} this person folder."
+        )
 
     # ========================================================
     # RETRY / ERROR HANDLING

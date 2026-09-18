@@ -113,20 +113,16 @@ FACE_SHARPNESS_MIN = 20.0
 
 FACE_SHARPNESS_MAX = 150.0
 
+
 # ============================================================
-# SAME-IMAGE DUPLICATE SUPPRESSION
+# FACE POSE
 # ============================================================
 
-# A duplicate observation must have a very high face similarity.
-# This is intentionally stricter than normal identity clustering.
-SAME_IMAGE_DUPLICATE_FACE_SIMILARITY = 0.82
-
-# The person detections must also overlap meaningfully.
-SAME_IMAGE_DUPLICATE_PERSON_IOU = 0.35
-
-# Or, when person boxes are not very similar, the face boxes may
-# provide the required geometric overlap.
-SAME_IMAGE_DUPLICATE_FACE_IOU = 0.30
+# Coarse yaw boundaries used for identity-profile grouping.
+# These are intentionally configurable because the final values
+# should be calibrated against the event's own images.
+FACE_POSE_FRONTAL_YAW_DEGREES = 20.0
+FACE_POSE_PROFILE_YAW_DEGREES = 55.0
 
 
 # ============================================================
@@ -155,6 +151,78 @@ BODY_SHARPNESS_MAX = 150.0
 # IDENTITY CLUSTERING
 # ============================================================
 
+# ------------------------------------------------------------
+# General clustering thresholds
+# ------------------------------------------------------------
+
+# Minimum face cosine similarity allowed for an identity merge.
+# A face similarity below this value can NEVER create a merge.
+MIN_FACE_SIMILARITY = 0.55
+
+# Final combined similarity required for a normal identity merge.
+MERGE_THRESHOLD = 0.78
+
+
+# ------------------------------------------------------------
+# Cross-pose clustering
+# ------------------------------------------------------------
+
+# Minimum face similarity required when comparing observations
+# belonging to different face-pose groups.
+CROSS_POSE_MIN_FACE_SIMILARITY = 0.60
+
+# Minimum body similarity required when comparing observations
+# belonging to different face-pose groups.
+CROSS_POSE_MIN_BODY_SIMILARITY = 0.50
+
+# Final combined similarity required for a cross-pose merge.
+CROSS_POSE_MERGE_THRESHOLD = 0.75
+
+
+# ------------------------------------------------------------
+# Cluster representatives
+# ------------------------------------------------------------
+
+# Maximum number of representatives retained from each
+# face-pose group.
+MAX_REPRESENTATIVES_PER_POSE = 3
+
+# Number of strongest observations used to represent a cluster.
+REPRESENTATIVE_COUNT = 3
+
+
+# ------------------------------------------------------------
+# Anchor requirements
+# ------------------------------------------------------------
+
+# Minimum face quality required for an observation to be
+# considered a reliable identity anchor.
+ANCHOR_MIN_FACE_QUALITY = 0.50
+
+# Minimum face detector confidence required for an observation
+# to be considered a reliable identity anchor.
+ANCHOR_MIN_FACE_DETECTION_CONFIDENCE = 0.50
+
+# Minimum face dimension in pixels required for an observation
+# to be used as an anchor.
+ANCHOR_MIN_FACE_SIZE = 40
+
+# Maximum absolute yaw allowed for a frontal anchor.
+ANCHOR_MAX_YAW_DEGREES = 20.0
+
+
+# ------------------------------------------------------------
+# Cluster size
+# ------------------------------------------------------------
+
+# Minimum observations required for a discovered identity.
+MIN_CLUSTER_SIZE = 2
+
+
+# ------------------------------------------------------------
+# Identity clustering weights
+# ------------------------------------------------------------
+
 # Combined identity score:
 #
 # Face      -> primary signal
@@ -167,6 +235,18 @@ CLUSTER_FACE_WEIGHT = 0.65
 CLUSTER_BODY_WEIGHT = 0.20
 
 CLUSTER_QUALITY_WEIGHT = 0.15
+
+
+# ============================================================
+# FACE-ONLY IDENTITY CLUSTERING
+# ============================================================
+
+# Used when an observation has face information but
+# does not have body information.
+
+CLUSTER_FACE_ONLY_WEIGHT = 0.75
+
+CLUSTER_FACE_ONLY_QUALITY_WEIGHT = 0.25
 
 
 # ============================================================
@@ -199,55 +279,6 @@ MIN_CLUSTER_SIZE = 2
 # Number of strongest observations considered when
 # representing a cluster.
 REPRESENTATIVE_COUNT = 3
-
-
-# ============================================================
-# BEST IMAGE SELECTION
-# ============================================================
-
-# Maximum number of best source images selected for each identity.
-BEST_IMAGES_PER_CLUSTER = 5
-
-# Prefer pose diversity when good candidates are available.
-BEST_IMAGES_REQUIRE_POSE_DIVERSITY = True
-
-
-# ============================================================
-# FACE POSE / CROSS-POSE IDENTITY MATCHING
-# ============================================================
-
-# Coarse head-pose classification from InsightFace 5-point landmarks.
-FACE_POSE_FRONTAL_YAW_DEGREES = 20.0
-FACE_POSE_PROFILE_YAW_DEGREES = 55.0
-
-# Cross-pose matching is intentionally more permissive than
-# same-pose matching, but still requires supporting evidence.
-CROSS_POSE_MIN_FACE_SIMILARITY = 0.42
-CROSS_POSE_MIN_BODY_SIMILARITY = 0.45
-CROSS_POSE_MERGE_THRESHOLD = 0.66
-
-# Keep pose-diverse cluster representatives.
-MAX_REPRESENTATIVES_PER_POSE = 2
-
-# ============================================================
-# IDENTITY ANCHOR RULE
-# ============================================================
-#
-# A cluster may only become a discovered identity when it contains
-# at least one trusted full-face anchor. The anchor is deliberately
-# stricter than a normal valid face observation.
-#
-# The current implementation uses frontal pose + face quality +
-# detection confidence + minimum face resolution as the practical
-# definition of a clear full face.
-#
-# Side/profile observations can expand an anchored identity, but
-# side/profile-only observations cannot create an identity cluster
-# by themselves.
-ANCHOR_MIN_FACE_QUALITY = 0.70
-ANCHOR_MIN_FACE_DETECTION_CONFIDENCE = 0.70
-ANCHOR_MIN_FACE_SIZE = 60
-ANCHOR_MAX_YAW_DEGREES = 20.0
 
 
 # ============================================================
@@ -300,7 +331,6 @@ CLUSTER_VISUALIZATION_DIR_NAME = "cluster_visualization"
 EVENTS_PATH = "data/events"
 
 # Root directory containing known/reference people.
-REFERENCES_PATH = "data/people"
 
 # SQLite database filename.
 EVENT_DATABASE_FILENAME = "event.db"
@@ -326,25 +356,48 @@ WORKER_USE_PROCESSES = True
 
 
 # ============================================================
-# FINAL EVENT OUTPUT
+# REFERENCE-BASED FINAL OUTPUT
 # ============================================================
 
-# Supported modes:
-#
-#   CLUSTERING_ONLY
-#       clusterXX/allImages/
-#
-#   BEST_IMAGES_ONLY
-#       clusterXX/bestImages/
-#
-#   BOTH
-#       clusterXX/allImages/
-#       clusterXX/bestImages/
-#
-EVENT_OUTPUT_MODE = "BOTH"
+# Folder containing known/reference images. Each image must use:
+#     Person Name - Phone Number.ext
+# The phone number is metadata only; the person name becomes
+# the final output folder name.
+REFERENCES_PATH = "data/reference"
 
-# Folder created inside each event directory.
+# Minimum cosine similarity between a reference face embedding
+# and an observation in a discovered cluster for that cluster
+# to be assigned to a known person.
+REFERENCE_MATCH_THRESHOLD = 0.55
+
+# If two known people have nearly identical best scores for the
+# same cluster, the cluster is considered ambiguous and is not
+# exported. Set to 0.0 to disable the margin requirement.
+REFERENCE_MATCH_MIN_MARGIN = 0.02
+
+# Final output directory inside the event directory.
 EVENT_OUTPUT_DIRECTORY_NAME = "output"
 
-# Remove the previous generated output before writing a new result.
+# The reference-matched person output is the default final mode.
+EVENT_OUTPUT_MODE = "REFERENCE_MATCHED"
+
+# Remove previous final output before rebuilding it.
 EVENT_OUTPUT_CLEAN_BEFORE_RUN = True
+
+# Number of best source images retained from EACH matched cluster
+# when building the person's combined Best Images folder.
+BEST_IMAGES_PER_CLUSTER = 5
+
+# Keep pose diversity when selecting best images from a cluster.
+BEST_IMAGES_REQUIRE_POSE_DIVERSITY = True
+
+
+# ============================================================
+# GOOGLE DRIVE SHARING
+# ============================================================
+
+# Permission applied ONLY to each generated person folder when
+# GOOGLE_DRIVE_PUBLIC_LINK=True.
+# "writer" means anyone with that person's folder link can edit
+# that folder and its contents. The event folder is not public.
+GOOGLE_DRIVE_PUBLIC_LINK_ROLE = "writer"

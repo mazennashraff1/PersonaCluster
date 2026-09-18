@@ -9,6 +9,7 @@ import numpy as np
 
 from app.models.detector import BoundingBox
 from app.models.observation import PersonObservation
+from app import configuration as config
 
 
 class EventStore:
@@ -102,105 +103,127 @@ class EventStore:
         self.connection.execute("PRAGMA foreign_keys = ON")
 
         # -----------------------------------------------------
-        # Legacy/batched observation commit support
-        # -----------------------------------------------------
-        #
-        # Normal save_observations() can still use batched
-        # commits.
-        #
-        # Worker processing uses the atomic
-        # save_observations_and_complete_job() method instead.
-        # -----------------------------------------------------
-
-        self._pending_images = 0
-        self._commit_every = 50
-
-        # -----------------------------------------------------
         # Create database schema
         # -----------------------------------------------------
 
         self._create_schema()
 
     # =========================================================
-    # SQLite commit helper
+    # Portable image ID / path
     # =========================================================
 
-    def commit_if_needed(self) -> None:
+    @staticmethod
+    def _project_root() -> Path:
         """
-        Commit pending observation changes after a configured
-        number of images.
+        Return the project root independently of the current working
+        directory.
 
-        This is used by the normal save_observations() method.
+        eventStore.py lives under:
+            <project>/app/storage/eventStore.py
 
-        Worker processing uses a separate atomic transaction
-        that commits observations and job completion together.
+        Therefore parents[2] is the project root.
         """
+        return Path(__file__).resolve().parents[2]
 
-        self._pending_images += 1
+    @classmethod
+    def _events_root(cls) -> Path:
+        """Return the absolute configured events root."""
+        return (cls._project_root() / Path(config.EVENTS_PATH)).resolve(strict=False)
 
-        if self._pending_images >= self._commit_every:
-            self.connection.commit()
-            self._pending_images = 0
-
-    # =========================================================
-    # Canonical image ID
-    # =========================================================
-
+    @classmethod
     def _canonical_image_id(
-        self,
+        cls,
         image_path: str | Path,
     ) -> str:
         """
-        Return the canonical full-path identifier for an image.
+        Return a portable project-relative image ID.
 
-        The full normalized path is used instead of only the filename
-        so files with the same name in different folders remain
-        distinct. For example:
+        The stored ID always keeps the complete path beginning at
+        ``data/events`` (or whatever EVENTS_PATH is configured to be).
 
-            /event/images/camera_01/photo.jpg
-            /event/images/camera_02/photo.jpg
+        Example:
 
-        become two different image IDs.
+            data/events/Wedding/camera1/IMG_001.jpg
+            data/events/Wedding/camera2/IMG_001.jpg
+
+        remain different IDs even though both filenames are IMG_001.jpg.
+
+        Absolute machine-specific paths are NEVER stored in SQLite.
         """
-
         path = Path(image_path)
 
-        # Absolute paths are already unambiguous.
+        project_root = cls._project_root()
+        events_root = cls._events_root()
+
+        # ---------------------------------------------------------
+        # Absolute input
+        # ---------------------------------------------------------
+        #
+        # If the file is already inside the configured events tree,
+        # convert it directly to a project-relative path.
+        # ---------------------------------------------------------
         if path.is_absolute():
-            return str(path.resolve(strict=False))
+            absolute_path = path.resolve(strict=False)
 
-        # Normalize relative paths against the configured event root.
-        #
-        # The image discovery code may return paths such as:
-        #     data/events/Cocktail Area/16dash-42.jpg
-        # while EventStore itself is rooted at:
-        #     data/events
-        #
-        # In that case, blindly doing:
-        #     event_path / image_path
-        # would produce the broken path:
-        #     data/events/data/events/Cocktail Area/...
-        #
-        # Strip one or more repeated event-root prefixes first, then
-        # attach the normalized remainder to the absolute event root.
-        event_root_relative = Path(self.event_path)
-        relative_parts = list(path.parts)
-        root_parts = list(event_root_relative.parts)
+            try:
+                relative_to_events = absolute_path.relative_to(events_root)
+            except ValueError:
+                # Keep this strict. An image outside EVENTS_PATH should
+                # not silently become a misleading project-relative ID.
+                raise ValueError(
+                    f"Image path '{absolute_path}' is outside "
+                    f"the configured events root '{events_root}'."
+                )
 
-        while (
-            root_parts
-            and len(relative_parts) >= len(root_parts)
-            and relative_parts[: len(root_parts)] == root_parts
+            return (Path(config.EVENTS_PATH) / relative_to_events).as_posix()
+
+        # ---------------------------------------------------------
+        # Relative input
+        # ---------------------------------------------------------
+        #
+        # Normal expected form:
+        #     data/events/Wedding/camera1/IMG_001.jpg
+        #
+        # If a caller supplies an event-root-relative path instead,
+        # resolve it against EVENTS_PATH.
+        # ---------------------------------------------------------
+        normalized = path.as_posix()
+
+        configured_events = Path(config.EVENTS_PATH).as_posix().rstrip("/")
+
+        if normalized == configured_events or normalized.startswith(
+            configured_events + "/"
         ):
-            relative_parts = relative_parts[len(root_parts) :]
+            return Path(normalized).as_posix()
 
-        normalized_relative = Path(*relative_parts) if relative_parts else Path()
+        # Compatibility with callers that pass:
+        #     Wedding/camera1/IMG_001.jpg
+        candidate = (Path(config.EVENTS_PATH) / path).as_posix()
+        return candidate
 
-        return str(
-            (self.event_path.resolve(strict=False) / normalized_relative).resolve(
-                strict=False
-            )
-        )
+    @classmethod
+    def _resolve_image_path(
+        cls,
+        image_id: str | Path,
+    ) -> Path:
+        """
+        Resolve a stored project-relative image ID to the current
+        machine's physical path.
+
+        Example:
+
+            DB:
+                data/events/Wedding/camera1/IMG_001.jpg
+
+            Runtime:
+                <current-project>/data/events/Wedding/camera1/IMG_001.jpg
+        """
+        path = Path(str(image_id))
+
+        if path.is_absolute():
+            return path.resolve(strict=False)
+
+        return (cls._project_root() / path).resolve(strict=False)
 
     # =========================================================
     # Schema
@@ -343,6 +366,29 @@ class EventStore:
         )
 
         # =====================================================
+        # Reference-to-cluster matches
+        # =====================================================
+
+        # A known person may own multiple discovered clusters, so this
+        # relationship is stored separately from observations.cluster_id.
+        self.connection.execute("""
+            CREATE TABLE IF NOT EXISTS cluster_person_matches (
+                cluster_id INTEGER PRIMARY KEY,
+                person_name TEXT NOT NULL,
+                similarity REAL NOT NULL,
+                margin REAL NOT NULL,
+                reference_image TEXT,
+                matched_at REAL NOT NULL
+            )
+            """)
+
+        self.connection.execute("""
+            CREATE INDEX IF NOT EXISTS
+            idx_cluster_person_matches_person
+            ON cluster_person_matches(person_name)
+            """)
+
+        # =====================================================
         # Image processing jobs
         # =====================================================
 
@@ -408,28 +454,64 @@ class EventStore:
     # Image-job schema migration
     # =========================================================
 
+    @classmethod
+    def _legacy_image_id_to_portable(
+        cls,
+        image_path: str | Path,
+    ) -> str:
+        """
+        Convert old absolute/relative image paths into the new
+        project-relative ``data/events/...`` representation.
+
+        This specifically handles old databases that stored paths such as:
+
+            D:\\University\\...\\data\\events\\Wedding\\IMG_001.jpg
+
+        The machine-specific prefix is discarded while the complete
+        ``data/events/...`` hierarchy is preserved.
+        """
+        raw = str(image_path).strip()
+
+        # Already in the new portable format.
+        configured_events = Path(config.EVENTS_PATH).as_posix().rstrip("/")
+        normalized = raw.replace("\\", "/")
+
+        if normalized == configured_events or normalized.startswith(
+            configured_events + "/"
+        ):
+            return Path(normalized).as_posix()
+
+        # Locate the configured EVENTS_PATH anywhere inside an old
+        # absolute path. This makes migration independent of the old
+        # project location.
+        marker = "/" + configured_events + "/"
+        lower_normalized = normalized.lower()
+        marker_lower = marker.lower()
+
+        marker_index = lower_normalized.find(marker_lower)
+
+        if marker_index >= 0:
+            return normalized[marker_index + 1 :]
+
+        # Fall back to the normal canonicalizer for paths that can
+        # still be resolved unambiguously from the current project.
+        return cls._canonical_image_id(raw)
+
     def _migrate_image_job_ids(self) -> None:
         """
-        Normalize legacy image job paths and IDs to canonical full paths.
+        Normalize existing image jobs and observations to portable
+        project-relative image IDs.
 
-        This also repairs the accidental duplicated event-root prefix that
-        can occur when an older database was populated with paths such as:
-
-            data/events/data/events/Cocktail Area/16dash-42.jpg
-
-        Existing job state, attempts, and timestamps are preserved.
+        Existing processing state, attempts, and timestamps are preserved.
         """
         rows = self.connection.execute(
             "SELECT job_id, image_id, image_path FROM image_jobs"
         ).fetchall()
 
         for job_id, current_image_id, image_path in rows:
-            canonical_path = self._canonical_image_id(image_path)
+            portable_id = self._legacy_image_id_to_portable(image_path)
 
-            if (
-                str(current_image_id) != canonical_path
-                or str(image_path) != canonical_path
-            ):
+            if str(current_image_id) != portable_id or str(image_path) != portable_id:
                 self.connection.execute(
                     """
                     UPDATE image_jobs
@@ -437,26 +519,24 @@ class EventStore:
                         image_path = ?
                     WHERE job_id = ?
                     """,
-                    (canonical_path, canonical_path, job_id),
+                    (portable_id, portable_id, job_id),
                 )
 
-        # Observations store image_id separately from image_jobs. Normalize
-        # those values too so clustering/output never sees mixed path forms.
         observation_rows = self.connection.execute(
             "SELECT observation_id, image_id FROM observations"
         ).fetchall()
 
         for observation_id, current_image_id in observation_rows:
-            canonical_id = self._canonical_image_id(current_image_id)
+            portable_id = self._legacy_image_id_to_portable(current_image_id)
 
-            if str(current_image_id) != canonical_id:
+            if str(current_image_id) != portable_id:
                 self.connection.execute(
                     """
                     UPDATE observations
                     SET image_id = ?
                     WHERE observation_id = ?
                     """,
-                    (canonical_id, observation_id),
+                    (portable_id, observation_id),
                 )
 
         self.connection.commit()
@@ -743,34 +823,6 @@ class EventStore:
     # Save multiple observations
     # =========================================================
 
-    def save_observations(
-        self,
-        observations: Iterable[PersonObservation],
-    ) -> None:
-        """
-        Save all observations generated from one image.
-
-        This method is kept for normal/non-worker usage.
-
-        Worker processing should use:
-
-            save_observations_and_complete_job()
-
-        so that observation persistence and job completion
-        happen atomically.
-        """
-
-        try:
-            for observation in observations:
-                self.save_observation(observation)
-
-            self.commit_if_needed()
-
-        except Exception:
-            self.connection.rollback()
-            self._pending_images = 0
-            raise
-
     # =========================================================
     # Atomic worker save
     # =========================================================
@@ -878,79 +930,13 @@ class EventStore:
 
             self.connection.commit()
 
-            self._pending_images = 0
-
         except Exception:
             self.connection.rollback()
-            self._pending_images = 0
             raise
 
     # =========================================================
     # Get one observation
     # =========================================================
-
-    def get_observation(
-        self,
-        observation_id: int,
-    ) -> Optional[PersonObservation]:
-        """
-        Retrieve one observation by observation ID.
-        """
-
-        cursor = self.connection.execute(
-            """
-            SELECT
-                observation_id,
-                image_id,
-                observation_type,
-
-                person_x1,
-                person_y1,
-                person_x2,
-                person_y2,
-
-                face_x1,
-                face_y1,
-                face_x2,
-                face_y2,
-
-                person_detection_confidence,
-                face_detection_confidence,
-                association_score,
-
-                face_quality,
-                body_quality,
-
-                face_embedding_valid,
-                body_embedding_valid,
-
-                face_embedding,
-                body_embedding,
-
-                face_embedding_dimension,
-                body_embedding_dimension,
-
-                moment_id,
-                cluster_id,
-
-                face_yaw,
-                face_pitch,
-                face_roll,
-                face_pose
-
-            FROM observations
-
-            WHERE observation_id = ?
-            """,
-            (observation_id,),
-        )
-
-        row = cursor.fetchone()
-
-        if row is None:
-            return None
-
-        return self._row_to_observation(row)
 
     # =========================================================
     # Convert DB row to observation
@@ -1045,73 +1031,6 @@ class EventStore:
     # Query observations for one image
     # =========================================================
 
-    def get_observations_for_image(
-        self,
-        image_id: str,
-    ) -> list[PersonObservation]:
-        """
-        Retrieve all observations belonging to one image.
-
-        The supplied path is normalized to the canonical full-path image ID
-        used by the database. Relative paths remain supported for callers.
-        """
-
-        image_id = self._canonical_image_id(image_id)
-
-        cursor = self.connection.execute(
-            """
-            SELECT
-                observation_id,
-                image_id,
-                observation_type,
-
-                person_x1,
-                person_y1,
-                person_x2,
-                person_y2,
-
-                face_x1,
-                face_y1,
-                face_x2,
-                face_y2,
-
-                person_detection_confidence,
-                face_detection_confidence,
-                association_score,
-
-                face_quality,
-                body_quality,
-
-                face_embedding_valid,
-                body_embedding_valid,
-
-                face_embedding,
-                body_embedding,
-
-                face_embedding_dimension,
-                body_embedding_dimension,
-
-                moment_id,
-                cluster_id,
-
-                face_yaw,
-                face_pitch,
-                face_roll,
-                face_pose
-
-            FROM observations
-
-            WHERE image_id = ?
-
-            ORDER BY observation_id
-            """,
-            (image_id,),
-        )
-
-        rows = cursor.fetchall()
-
-        return [self._row_to_observation(row) for row in rows]
-
     # =========================================================
     # Get all observations
     # =========================================================
@@ -1199,47 +1118,6 @@ class EventStore:
     # =========================================================
     # Get next observation ID
     # =========================================================
-
-    def get_next_observation_id(self) -> int:
-        """
-        Return the current next observation ID.
-
-        This method is kept for backward compatibility.
-
-        IMPORTANT:
-
-        Do NOT use this method for assigning IDs from multiple
-        workers.
-
-        Workers should use reserve_observation_ids().
-        """
-
-        cursor = self.connection.execute("""
-            SELECT next_id
-            FROM observation_sequence
-            WHERE id = 1
-            """)
-
-        row = cursor.fetchone()
-
-        if row is not None:
-            return int(row[0])
-
-        # -----------------------------------------------------
-        # Defensive fallback for an old database.
-        # -----------------------------------------------------
-
-        cursor = self.connection.execute("""
-            SELECT COALESCE(
-                MAX(observation_id),
-                -1
-            ) + 1
-            FROM observations
-            """)
-
-        row = cursor.fetchone()
-
-        return int(row[0])
 
     # =========================================================
     # Reserve observation IDs
@@ -1362,6 +1240,61 @@ class EventStore:
             raise
 
     # =========================================================
+    # Save reference-to-cluster matches
+    # =========================================================
+
+    def save_cluster_person_matches(
+        self,
+        match_details: dict[int, dict[str, object]],
+    ) -> None:
+        """Persist accepted reference-person assignments for clusters."""
+        try:
+            self.connection.execute("DELETE FROM cluster_person_matches")
+
+            for cluster_id, details in match_details.items():
+                if not bool(details.get("accepted")):
+                    continue
+
+                person_name = details.get("person_name")
+                if not person_name:
+                    continue
+
+                self.connection.execute(
+                    """
+                    INSERT OR REPLACE INTO cluster_person_matches (
+                        cluster_id, person_name, similarity, margin,
+                        reference_image, matched_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(cluster_id),
+                        str(person_name),
+                        float(details.get("score", 0.0)),
+                        float(details.get("margin", 0.0)),
+                        details.get("reference_image"),
+                        time.time(),
+                    ),
+                )
+
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def get_cluster_person_matches(self) -> dict[int, str]:
+        """Load accepted cluster-to-person matches from SQLite."""
+        cursor = self.connection.execute("""
+            SELECT cluster_id, person_name
+            FROM cluster_person_matches
+            ORDER BY cluster_id
+            """)
+        return {
+            int(cluster_id): str(person_name)
+            for cluster_id, person_name in cursor.fetchall()
+        }
+
+    # =========================================================
     # Create image processing jobs
     # =========================================================
 
@@ -1388,10 +1321,10 @@ class EventStore:
 
                 image_path = Path(image_path)
 
-                # Canonicalize once and use the same value for BOTH fields.
-                # This prevents collisions between duplicate filenames in
-                # different directories and keeps job/observation identity
-                # consistent throughout the pipeline.
+                # Store a portable project-relative path in BOTH fields.
+                #
+                # The complete data/events/... hierarchy is preserved, so
+                # duplicate filenames in different folders remain unique.
                 image_id = self._canonical_image_id(image_path)
                 image_path = Path(image_id)
 
@@ -1655,7 +1588,9 @@ class EventStore:
             return {
                 "job_id": int(job_id),
                 "image_id": str(image_id),
-                "image_path": str(image_path),
+                # image_path in SQLite is portable; workers need the
+                # current machine's physical path for OpenCV.
+                "image_path": str(self._resolve_image_path(image_path)),
                 "attempts": int(attempts) + 1,
             }
 
@@ -1666,60 +1601,6 @@ class EventStore:
     # =========================================================
     # Complete image job
     # =========================================================
-
-    def complete_image_job(
-        self,
-        job_id: int,
-        worker_id: str,
-    ) -> None:
-        """
-        Mark an image-processing job as COMPLETED.
-
-        Normally the worker should use:
-
-            save_observations_and_complete_job()
-
-        instead.
-
-        This method remains available for compatibility.
-        """
-
-        try:
-            cursor = self.connection.execute(
-                """
-                UPDATE image_jobs
-
-                SET
-                    status = 'COMPLETED',
-                    completed_at = ?
-
-                WHERE
-                    job_id = ?
-
-                    AND worker_id = ?
-
-                    AND status = 'PROCESSING'
-                """,
-                (
-                    time.time(),
-                    job_id,
-                    worker_id,
-                ),
-            )
-
-            self.connection.commit()
-
-            if cursor.rowcount != 1:
-                raise RuntimeError(
-                    f"Worker {worker_id} could not complete "
-                    f"job {job_id}. "
-                    f"The job may have been recovered or "
-                    f"claimed by another worker."
-                )
-
-        except Exception:
-            self.connection.rollback()
-            raise
 
     # =========================================================
     # Fail image job

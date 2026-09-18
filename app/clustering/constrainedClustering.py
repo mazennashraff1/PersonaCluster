@@ -329,46 +329,6 @@ class ConstrainedIdentityClustering:
 
         return array / norm
 
-    @classmethod
-    def _cosine_similarity(
-        cls,
-        first: Optional[np.ndarray],
-        second: Optional[np.ndarray],
-    ) -> Optional[float]:
-        """
-        Original public cosine similarity behavior.
-
-        Kept unchanged for compatibility.
-        """
-
-        first_normalised = cls._normalise_embedding(first)
-
-        second_normalised = cls._normalise_embedding(second)
-
-        if first_normalised is None or second_normalised is None:
-            return None
-
-        if first_normalised.shape != second_normalised.shape:
-            return None
-
-        similarity = float(
-            np.dot(
-                first_normalised,
-                second_normalised,
-            )
-        )
-
-        if not np.isfinite(similarity):
-            return None
-
-        return float(
-            np.clip(
-                similarity,
-                -1.0,
-                1.0,
-            )
-        )
-
     # ============================================================
     # Cached observation preparation
     # ============================================================
@@ -521,58 +481,6 @@ class ConstrainedIdentityClustering:
         return (
             first_pose in known and second_pose in known and first_pose != second_pose
         )
-
-    def pair_score(
-        self,
-        first: PersonObservation,
-        second: PersonObservation,
-    ) -> Optional[float]:
-        face_similarity = self._cosine_similarity(
-            first.face_embedding, second.face_embedding
-        )
-        if face_similarity is None:
-            return None
-
-        cross_pose = self._poses_are_cross_pose(first, second)
-        quality_score = (self._quality_score(first) + self._quality_score(second)) / 2.0
-
-        body_similarity: Optional[float] = None
-        if first.body_embedding_valid and second.body_embedding_valid:
-            body_similarity = self._cosine_similarity(
-                first.body_embedding, second.body_embedding
-            )
-
-        if cross_pose:
-            if face_similarity < self.cross_pose_min_face_similarity:
-                return None
-            if (
-                body_similarity is not None
-                and face_similarity < self.min_face_similarity
-                and body_similarity < self.cross_pose_min_body_similarity
-            ):
-                return None
-        elif face_similarity < self.min_face_similarity:
-            return None
-
-        if body_similarity is not None:
-            body_score = float(np.clip((body_similarity + 1.0) / 2.0, 0.0, 1.0))
-            score = (
-                self.face_weight * face_similarity
-                + self.body_weight * body_score
-                + self.quality_weight * quality_score
-            )
-        else:
-            score = (
-                self.face_only_weight * face_similarity
-                + self.face_only_quality_weight * quality_score
-            )
-
-        if not np.isfinite(score):
-            return None
-        score = float(np.clip(score, 0.0, 1.0))
-        if cross_pose and score < self.cross_pose_merge_threshold:
-            return None
-        return score
 
     # ============================================================
     # Cached pair scoring
@@ -896,50 +804,6 @@ class ConstrainedIdentityClustering:
         return (
             second_cluster_id,
             first_cluster_id,
-        )
-
-    def _push_cluster_pair(
-        self,
-        heap: list[tuple],
-        first: IdentityCluster,
-        second: IdentityCluster,
-        versions: dict[int, int],
-    ) -> None:
-        """
-        Calculate and insert one cluster pair into the priority
-        queue.
-
-        Invalid / same-image pairs are intentionally not inserted.
-        """
-
-        if not self._can_merge(
-            first,
-            second,
-        ):
-            return
-
-        score = self._cluster_pair_score(
-            first,
-            second,
-        )
-
-        if score is None:
-            return
-
-        first_id, second_id = self._pair_key(
-            first.cluster_id,
-            second.cluster_id,
-        )
-
-        heapq.heappush(
-            heap,
-            (
-                -score,
-                first_id,
-                second_id,
-                versions[first_id],
-                versions[second_id],
-            ),
         )
 
     # ============================================================

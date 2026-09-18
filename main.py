@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-import gc
-import multiprocessing
 import os
+import gc
+from openpyxl import Workbook
+import multiprocessing
 import time
+from dotenv import load_dotenv
 from pathlib import Path
 
-import cv2
 
 from app import configuration as config
-from app.clustering.clusterVisualizer import visualizeClusters
 from app.clustering.constrainedClustering import (
     ConstrainedIdentityClustering,
 )
-from app.selection.bestImageSelector import BestImageSelector
+from app.integrations.googleDriveUploader import GoogleDriveUploader
 from app.output.eventOutputManager import EventOutputManager
+from app.identity.referenceMatcher import ReferenceMatcher
 from app.storage.eventStore import EventStore
 from app.workers.imageWorker import run_image_worker
 
@@ -22,12 +23,115 @@ from app.workers.imageWorker import run_image_worker
 # Configuration
 # ============================================================
 
-EVENT_PATH = Path(config.EVENTS_PATH).resolve()
+PROJECT_ROOT = Path(__file__).resolve().parent
+EVENT_PATH = (PROJECT_ROOT / config.EVENTS_PATH).resolve()
+
+load_dotenv()
+
+GOOGLE_DRIVE_ENABLED = (
+    os.getenv(
+        "GOOGLE_DRIVE_ENABLED",
+        "false",
+    ).lower()
+    == "true"
+)
+
+GOOGLE_DRIVE_CREDENTIALS_PATH = os.getenv(
+    "GOOGLE_DRIVE_CREDENTIALS_PATH",
+    "credentials/credentials.json",
+)
+
+GOOGLE_DRIVE_TOKEN_PATH = os.getenv(
+    "GOOGLE_DRIVE_TOKEN_PATH",
+    "data/google_drive/token.json",
+)
+
+GOOGLE_DRIVE_ROOT_FOLDER_ID = os.getenv(
+    "GOOGLE_DRIVE_ROOT_FOLDER_ID",
+    "",
+)
+
+GOOGLE_DRIVE_FOLDER_NAME = os.getenv(
+    "GOOGLE_DRIVE_FOLDER_NAME",
+    "Event Results",
+)
+
+GOOGLE_DRIVE_PUBLIC_LINK = (
+    os.getenv(
+        "GOOGLE_DRIVE_PUBLIC_LINK",
+        "true",
+    ).lower()
+    == "true"
+)
+
+GOOGLE_DRIVE_RETRY_COUNT = int(
+    os.getenv(
+        "GOOGLE_DRIVE_RETRY_COUNT",
+        "3",
+    )
+)
+
+GOOGLE_DRIVE_HTTP_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "GOOGLE_DRIVE_HTTP_TIMEOUT_SECONDS",
+        "60",
+    )
+)
 
 
 # ============================================================
 # Get image paths
 # ============================================================
+
+
+def generate_final_excel(
+    output_directory: str | Path,
+    person_contacts: dict[str, str],
+    person_folder_urls: dict[str, str],
+) -> Path:
+    """Create the final Excel sheet for the matched people."""
+    output_directory = Path(output_directory)
+    excel_path = output_directory / "final_results.xlsx"
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Results"
+
+    worksheet.append(
+        [
+            "Name of Person",
+            "Phone Number",
+            "Folder Shared Link",
+        ]
+    )
+
+    for person_directory in sorted(
+        (path for path in output_directory.iterdir() if path.is_dir()),
+        key=lambda path: path.name.casefold(),
+    ):
+        person_name = person_directory.name
+        link = person_folder_urls.get(person_name, "")
+        worksheet.append(
+            [
+                person_name,
+                person_contacts.get(person_name, ""),
+                link,
+            ]
+        )
+
+        if link:
+            cell = worksheet.cell(row=worksheet.max_row, column=3)
+            cell.hyperlink = link
+            cell.style = "Hyperlink"
+
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    worksheet.column_dimensions["A"].width = 30
+    worksheet.column_dimensions["B"].width = 22
+    worksheet.column_dimensions["C"].width = 70
+
+    workbook.save(excel_path)
+    return excel_path
 
 
 def get_image_paths(
@@ -63,6 +167,7 @@ def get_image_paths(
     valid_extensions = {
         ".jpg",
         ".jpeg",
+        ".avif",
         ".png",
         ".bmp",
         ".webp",
@@ -86,13 +191,15 @@ def get_image_paths(
             continue
 
         # ----------------------------------------------------
-        # Yield the EXACT image path.
+        # Yield the exact physical image path.
         #
-        # Example:
+        # EventStore converts this absolute runtime path into the
+        # portable project-relative ID:
         #
-        # EVENT_PATH/folder1/subfolder/image2.jpg
+        #     data/events/<folders>/<filename>
         #
-        # The worker receives that exact file.
+        # The complete folder hierarchy is retained so duplicate
+        # filenames remain distinguishable.
         # ----------------------------------------------------
 
         yield image_path.resolve()
@@ -442,7 +549,6 @@ def main():
         7. Retry failed images once
         8. Verify final job state
         9. Run event-level clustering
-        10. Run visualization
     """
 
     program_start = time.perf_counter()
@@ -605,64 +711,29 @@ def main():
 
         # ====================================================
         # PHASE 4
-        # Best-image selection
+        # Match discovered clusters against known references
         # ====================================================
-
-        print()
-        print("=" * 60)
-        print("BEST IMAGE SELECTION")
-        print("=" * 60)
-
-        best_image_selector = BestImageSelector(
-            max_images_per_cluster=config.BEST_IMAGES_PER_CLUSTER,
-            min_pose_diversity=config.BEST_IMAGES_REQUIRE_POSE_DIVERSITY,
-        )
-
-        best_image_selections = best_image_selector.select(
+        # The clustering algorithm is unchanged. A single known person may
+        # own multiple cluster IDs (for example frontal + side/profile).
+        reference_matcher = ReferenceMatcher(config.REFERENCES_PATH)
+        cluster_person_matches, match_details = reference_matcher.match_clusters(
             observations=observations,
             assignments=assignments,
         )
 
-        for cluster_id, selection in best_image_selections.items():
-            print(
-                f"  Cluster {cluster_id}: "
-                f"selected {len(selection.candidates)} best image(s)"
-            )
+        # Persist the cluster -> known-person relationship as well as the
+        # existing observations.cluster_id values.
+        event_store.save_cluster_person_matches(match_details)
 
-            for candidate in selection.candidates:
-                print(
-                    f"    - {candidate.image_id} "
-                    f"pose={candidate.pose} "
-                    f"score={candidate.score:.3f}"
-                )
+        print()
+        print(
+            f"Accepted reference matches: {len(cluster_person_matches)} " f"cluster(s)"
+        )
 
         # ====================================================
         # PHASE 5
-        # Final event output
+        # Final reference-matched event output
         # ====================================================
-
-        # Build an image_id -> source path map from the same recursive
-        # discovery logic used when image jobs were created.
-        source_images: dict[str, Path] = {}
-        duplicate_source_ids: set[str] = set()
-
-        for image_path in get_image_paths(EVENT_PATH):
-            image_id = image_path.name
-            if image_id in source_images:
-                duplicate_source_ids.add(image_id)
-                continue
-            source_images[image_id] = image_path
-
-        if duplicate_source_ids:
-            print()
-            print("[WARNING] Duplicate image filenames were found in the event:")
-            for image_id in sorted(duplicate_source_ids):
-                print(f"  - {image_id}")
-            print(
-                "EventStore uses the filename as image_id, so duplicate filenames "
-                "cannot be distinguished by the current database design. "
-                "The first discovered path will be used for output."
-            )
 
         output_manager = EventOutputManager(
             event_path=EVENT_PATH,
@@ -674,30 +745,61 @@ def main():
         output_directory = output_manager.write(
             observations=observations,
             assignments=assignments,
-            best_selections=best_image_selections,
-            source_images=source_images,
+            cluster_person_matches=cluster_person_matches,
         )
 
+        print(f"Output directory: {output_directory}")
+
+        # counts = {"PENDING": 0, "PROCESSING": 0, "COMPLETED": 4055, "FAILED": 0}
+
         # ====================================================
-        # PHASE 5.5
-        # Final visualization
+        # PHASE 6
+        # Upload person folders/images and create the final Excel file locally
         # ====================================================
 
-        print()
-        print("=" * 60)
-        print("VISUAL VALIDATION")
-        print("=" * 60)
+        person_contacts = reference_matcher.get_person_contacts()
+        person_folder_urls: dict[str, str] = {}
+        google_drive_result = None
 
-        visualization_dir = visualizeClusters(
-            event_path=EVENT_PATH,
-            observations=observations,
-            cluster_assignments=assignments,
+        google_drive_uploader = None
+        if GOOGLE_DRIVE_ENABLED:
+            google_drive_uploader = GoogleDriveUploader(
+                credentials_path=GOOGLE_DRIVE_CREDENTIALS_PATH,
+                token_path=GOOGLE_DRIVE_TOKEN_PATH,
+                root_folder_id=GOOGLE_DRIVE_ROOT_FOLDER_ID,
+                root_folder_name=GOOGLE_DRIVE_FOLDER_NAME,
+                public_link=GOOGLE_DRIVE_PUBLIC_LINK,
+                public_link_role=getattr(
+                    config,
+                    "GOOGLE_DRIVE_PUBLIC_LINK_ROLE",
+                    "writer",
+                ),
+                retry_count=GOOGLE_DRIVE_RETRY_COUNT,
+                http_timeout_seconds=GOOGLE_DRIVE_HTTP_TIMEOUT_SECONDS,
+            )
+
+            google_drive_result = google_drive_uploader.upload_event(
+                output_directory=output_directory,
+                event_name=EVENT_PATH.name,
+            )
+            person_folder_urls = google_drive_result["person_folder_urls"]
+
+        excel_path = generate_final_excel(
+            output_directory=output_directory,
+            person_contacts=person_contacts,
+            person_folder_urls=person_folder_urls,
         )
 
-        print()
-        print("Cluster visualizations created at:")
+        print(f"[OUTPUT] Final Excel: {excel_path}")
 
-        print(f"  {visualization_dir}")
+        # The Excel report is generated locally only.
+        # Google Drive receives the person folders and their images, not the Excel file.
+        if google_drive_result is not None:
+            print("[DRIVE] Person folders and images uploaded successfully.")
+            print(
+                "[DRIVE] Event folder URL: "
+                f"{google_drive_result['event_folder_url']}"
+            )
 
         # ----------------------------------------------------
         # Release event-level observations.
@@ -705,7 +807,6 @@ def main():
 
         del observations
         del assignments
-        del best_image_selections
         del output_directory
 
         gc.collect()
@@ -740,12 +841,6 @@ def main():
         # ----------------------------------------------------
 
         event_store.close()
-
-        # ----------------------------------------------------
-        # Close any OpenCV windows.
-        # ----------------------------------------------------
-
-        cv2.destroyAllWindows()
 
 
 # ============================================================

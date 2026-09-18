@@ -9,7 +9,6 @@ from pathlib import Path
 
 import cv2
 
-from app import configuration as config
 from app.pipeline import PersonPipeline
 from app.storage.eventStore import EventStore
 

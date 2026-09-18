@@ -97,20 +97,12 @@ class PersonObservation:
 
     @property
     def has_face(self) -> bool:
-        """
-        Return True when this observation contains a face
-        embedding.
-        """
-
+        """Return True when this observation contains a face embedding."""
         return self.face_embedding is not None
 
     @property
     def has_body(self) -> bool:
-        """
-        Return True when this observation contains a body
-        embedding.
-        """
-
+        """Return True when this observation contains a body embedding."""
         return self.body_embedding is not None
 
     @property

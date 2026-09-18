@@ -43,15 +43,6 @@ class BoundingBox:
             (self.y1 + self.y2) / 2,
         )
 
-    def to_list(self) -> list[int]:
-        """Return the bounding box as [x1, y1, x2, y2]."""
-        return [
-            int(self.x1),
-            int(self.y1),
-            int(self.x2),
-            int(self.y2),
-        ]
-
 
 @dataclass
 class PersonDetection:

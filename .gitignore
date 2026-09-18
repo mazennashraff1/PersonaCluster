@@ -219,9 +219,11 @@ __marimo__/
 
 # Ignore everything inside data/event/
 data/events/*
+data/reference/*
 
 # Keep the event folder
 !data/events/.gitkeep
+!data/reference/.gitkeep
 
 # Ignore everything inside models/
 models/*
@@ -229,6 +231,7 @@ models/*
 # Keep the models folder
 !data/models/.gitkeep
 
-credentials.json
-token.json
 *.db
+
+credentials/
+data/google_drive/

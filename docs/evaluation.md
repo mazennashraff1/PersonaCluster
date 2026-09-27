@@ -51,14 +51,14 @@ The evaluation must verify that observations from one event never appear in anot
 
 A useful evaluation event should contain:
 
-- Multiple people
-- Multiple images per person
-- Different poses
-- Different image qualities
-- Occlusions
-- Multiple people in the same image
-- Different camera distances
-- Realistic event conditions
+* Multiple people
+* Multiple images per person
+* Different poses
+* Different image qualities
+* Occlusions
+* Multiple people in the same image
+* Different camera distances
+* Realistic event conditions
 
 Use only data you are permitted to process and evaluate.
 
@@ -68,12 +68,12 @@ Use only data you are permitted to process and evaluate.
 
 Measure:
 
-- Person detection precision
-- Person detection recall
-- False positives
-- False negatives
-- Small detections
-- Occlusion cases
+* Person detection precision
+* Person detection recall
+* False positives
+* False negatives
+* Small detections
+* Occlusion cases
 
 Poor detection propagates errors into later stages.
 
@@ -83,13 +83,13 @@ Poor detection propagates errors into later stages.
 
 Measure:
 
-- Face detection success
-- Missed faces
-- False face detections
-- Face-size distribution
-- Detection confidence
-- Pose distribution
-- Occluded/non-frontal cases
+* Face detection success
+* Missed faces
+* False face detections
+* Face-size distribution
+* Detection confidence
+* Pose distribution
+* Occluded/non-frontal cases
 
 ---
 
@@ -116,11 +116,11 @@ Useful rates include valid embedding rate and face/body availability rate.
 
 Primary metrics include:
 
-- Cluster purity
-- False merge rate
-- Fragmentation
-- Unknown/unassigned observation rate
-- Same-image constraint violations
+* Cluster purity
+* False merge rate
+* Fragmentation
+* Unknown/unassigned observation rate
+* Same-image constraint violations
 
 A false merge occurs when observations from different real people share one identity cluster.
 
@@ -179,11 +179,11 @@ Reference matching should be evaluated separately from clustering.
 
 Measure:
 
-- Correct reference assignments
-- Rejected low-similarity matches
-- Ambiguous matches
-- Wrong-person assignments
-- Multiple clusters correctly aggregated to one person
+* Correct reference assignments
+* Rejected low-similarity matches
+* Ambiguous matches
+* Wrong-person assignments
+* Multiple clusters correctly aggregated to one person
 
 References are event-local, so evaluate:
 
@@ -205,12 +205,12 @@ and separately evaluate another event.
 
 For each known person, inspect selected images for:
 
-- Strong face quality
-- Good face visibility
-- Good person detection
-- Strong association
-- Useful pose diversity
-- No unintended repeated source image
+* Strong face quality
+* Good face visibility
+* Good person detection
+* Strong association
+* Useful pose diversity
+* No unintended repeated source image
 
 A best-image failure is an output-selection issue, not necessarily a clustering failure.
 
@@ -220,11 +220,11 @@ A best-image failure is an output-selection issue, not necessarily a clustering 
 
 Check that:
 
-- The representative belongs to the correct person/cluster.
-- The face crop is valid.
-- The face is sufficiently visible.
-- The representative does not come from the reference folder.
-- The representative is generated from the event gallery.
+* The representative belongs to the correct person/cluster.
+* The face crop is valid.
+* The face is sufficiently visible.
+* The representative does not come from the reference folder.
+* The representative is generated from the event gallery.
 
 ---
 
@@ -342,16 +342,16 @@ Compare worker counts on the same event and configuration.
 
 Test:
 
-- Corrupt image
-- Missing image
-- Unsupported image
-- Model failure
-- CUDA out-of-memory
-- Worker termination
-- Database lock
-- Missing reference directory
-- Empty Gallery
-- Duplicate filenames in different folders
+* Corrupt image
+* Missing image
+* Unsupported image
+* Model failure
+* CUDA out-of-memory
+* Worker termination
+* Database lock
+* Missing reference directory
+* Empty Gallery
+* Duplicate filenames in different folders
 
 A single bad image should not silently invalidate successfully persisted work.
 

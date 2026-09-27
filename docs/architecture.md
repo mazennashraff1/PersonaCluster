@@ -210,26 +210,26 @@ data/events/<event_name>/event.db
 
 The database tracks:
 
-- Event metadata
-- Runs
-- Image registration
-- Image hashes
-- Image jobs
-- Observations
-- Observation/person comparison attempts
-- Clusters
-- Cluster memberships
-- Known people
-- Reference images
-- Cluster/person matches
-- Output artifacts
-- Processing operations
-- Model versions
-- Configuration snapshots
-- Image cluster state
-- Event stage state
+* Event metadata
+* Runs
+* Image registration
+* Image hashes
+* Image jobs
+* Observations
+* Observation/person comparison attempts
+* Clusters
+* Cluster memberships
+* Known people
+* Reference images
+* Cluster/person matches
+* Output artifacts
+* Processing operations
+* Model versions
+* Configuration snapshots
+* Image cluster state
+* Event stage state
 
-SQLite is configured for concurrent workers using WAL mode, `synchronous=NORMAL`, a busy timeout, and foreign-key enforcement.
+SQLite is configured for concurrent workers using WAL mode, `synchronous=NORMAL` , a busy timeout, and foreign-key enforcement.
 
 ---
 
@@ -277,7 +277,7 @@ This prevents every invocation from rebuilding the event from scratch.
 
 # 10. Stale Job Recovery
 
-A worker can terminate while an image remains `PROCESSING`.
+A worker can terminate while an image remains `PROCESSING` .
 
 The coordinator can detect jobs exceeding:
 
@@ -323,12 +323,12 @@ Clustering operates over all valid observations for one event.
 
 Evidence includes:
 
-- Face similarity
-- Body similarity
-- Quality
-- Pose
-- Identity anchors
-- Same-image constraints
+* Face similarity
+* Body similarity
+* Quality
+* Pose
+* Identity anchors
+* Same-image constraints
 
 Clustering does not mix observations across different events.
 
@@ -412,15 +412,15 @@ The batch coordinator should report the failing event and continue where the con
 
 The following invariants are important:
 
-1. Direct children of `data/events/` are events.
-2. Only `<event>/Gallery/` is gallery input.
-3. `<event>/reference/` is reference input.
-4. Nested gallery directories do not create events.
-5. Event databases are event-local.
-6. Clustering is event-local.
-7. Reference matching is event-local.
-8. Final output is `output/<event_name>/`.
-9. Excel is local.
+01. Direct children of `data/events/` are events.
+02. Only `<event>/Gallery/` is gallery input.
+03. `<event>/reference/` is reference input.
+04. Nested gallery directories do not create events.
+05. Event databases are event-local.
+06. Clustering is event-local.
+07. Reference matching is event-local.
+08. Final output is `output/<event_name>/`.
+09. Excel is local.
 10. Google Drive is optional.
 11. Image identity must distinguish duplicate filenames.
 12. Workers do not perform global clustering.

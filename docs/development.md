@@ -86,7 +86,7 @@ data/
         └── reference/
 ```
 
-Do not put reference images inside `Gallery/`.
+Do not put reference images inside `Gallery/` .
 
 Do not create an event for each camera/day folder.
 
@@ -126,15 +126,15 @@ complete event processing
 
 For a completely fresh event:
 
-1. Preserve the original gallery photographs.
-2. Create the event folder.
-3. Put all gallery folders under `Gallery/`.
-4. Put event references under `reference/`.
-5. Use a fresh `event.db` when testing schema/persistence changes.
-6. Remove old generated output for the event if required.
-7. Verify dependencies/models.
-8. Start with a conservative worker count.
-9. Run `python main.py`.
+01. Preserve the original gallery photographs.
+02. Create the event folder.
+03. Put all gallery folders under `Gallery/`.
+04. Put event references under `reference/`.
+05. Use a fresh `event.db` when testing schema/persistence changes.
+06. Remove old generated output for the event if required.
+07. Verify dependencies/models.
+08. Start with a conservative worker count.
+09. Run `python main.py`.
 10. Review job statistics.
 11. Review clustering statistics.
 12. Review reference matches.
@@ -152,11 +152,11 @@ data/events/<event_name>/event.db
 
 Do not blindly reuse an old database after changing:
 
-- Observation schema
-- Image identity rules
-- Worker architecture
-- Persistence schema
-- Clustering state model
+* Observation schema
+* Image identity rules
+* Worker architecture
+* Persistence schema
+* Clustering state model
 
 For those changes, use a fresh development event/database unless a migration exists.
 

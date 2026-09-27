@@ -162,9 +162,9 @@ This is a correctness constraint.
 
 Quality is derived from signals such as:
 
-- Detection confidence
-- Face/body size
-- Image sharpness
+* Detection confidence
+* Face/body size
+* Image sharpness
 
 Quality is normalized to:
 
@@ -179,7 +179,7 @@ Quality supports identity matching; it is not itself an identity signal.
 
 # 10. Face Pose
 
-Pose is estimated from facial landmarks using OpenCV `solvePnP`.
+Pose is estimated from facial landmarks using OpenCV `solvePnP` .
 
 The system derives:
 
@@ -209,10 +209,10 @@ Strong observations can act as identity anchors.
 
 Anchor requirements include configurable limits for:
 
-- Face quality
-- Face detection confidence
-- Face size
-- Face pose/yaw
+* Face quality
+* Face detection confidence
+* Face size
+* Face pose/yaw
 
 Conceptually:
 
@@ -348,12 +348,12 @@ Thresholds should be calibrated using labeled event data.
 
 Evaluate:
 
-- False merges
-- Fragmentation
-- Unknown observations
-- Same-image violations
-- Cross-pose behavior
-- Anchor quality
-- Best-image quality
+* False merges
+* Fragmentation
+* Unknown observations
+* Same-image violations
+* Cross-pose behavior
+* Anchor quality
+* Best-image quality
 
 Do not interpret a project-specific similarity threshold as a universal biometric standard.

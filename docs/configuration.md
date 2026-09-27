@@ -185,7 +185,7 @@ Pose categories are coarse contextual categories rather than precise 3D measurem
 
 Reference files are event-local.
 
-For event `EEA`:
+For event `EEA` :
 
 ```text
 data/events/EEA/reference/
@@ -277,13 +277,13 @@ Google Drive settings are controlled through configuration/environment values.
 
 Important concepts:
 
-- Authentication credentials
-- OAuth token
-- Root folder
-- Event folder
-- Public-link behavior
-- Retry count
-- HTTP timeout
+* Authentication credentials
+* OAuth token
+* Root folder
+* Event folder
+* Public-link behavior
+* Retry count
+* HTTP timeout
 
 Google Drive receives person folders and images, not the local Excel report.
 

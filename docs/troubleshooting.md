@@ -38,7 +38,7 @@ Check:
 data/events/<event>/Gallery/
 ```
 
-The application searches recursively under `Gallery`.
+The application searches recursively under `Gallery` .
 
 Correct:
 
@@ -100,7 +100,7 @@ This indicates that image discovery is using the event root instead of:
 <event>/Gallery/
 ```
 
-Verify that recursive discovery starts at `Gallery/`.
+Verify that recursive discovery starts at `Gallery/` .
 
 The following must never be scanned as gallery input:
 
@@ -147,7 +147,7 @@ app/output/eventOutputManager.py
 
 exists.
 
-Also verify that the project root is the directory containing `main.py`.
+Also verify that the project root is the directory containing `main.py` .
 
 ---
 
@@ -179,11 +179,11 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 Check:
 
-- NVIDIA driver
-- Active Python environment
-- PyTorch installation
-- GPU visibility
-- CUDA-compatible PyTorch build
+* NVIDIA driver
+* Active Python environment
+* PyTorch installation
+* GPU visibility
+* CUDA-compatible PyTorch build
 
 InsightFace/ONNX Runtime may independently fall back to CPU depending on installed providers.
 
@@ -215,12 +215,12 @@ More workers can multiply memory consumption.
 
 Check:
 
-- File exists
-- Path is correct
-- File is readable
-- File is not corrupt
-- Extension is supported
-- OpenCV can decode it
+* File exists
+* Path is correct
+* File is readable
+* File is not corrupt
+* Extension is supported
+* OpenCV can decode it
 
 If the file is valid in another image viewer but OpenCV cannot decode it, test the decoder independently.
 
@@ -248,12 +248,12 @@ Then restart the environment.
 
 Inspect:
 
-- Worker process termination
-- CUDA errors
-- Model initialization
-- Image decoding
-- Database errors
-- Python exceptions
+* Worker process termination
+* CUDA errors
+* Model initialization
+* Image decoding
+* Database errors
+* Python exceptions
 
 The stale-job timeout is:
 
@@ -336,12 +336,12 @@ CROSS_POSE_MERGE_THRESHOLD
 
 Also inspect:
 
-- Face quality
-- Pose
-- Body similarity
-- Identity anchors
-- Same-image constraint
-- Observation quality
+* Face quality
+* Pose
+* Body similarity
+* Identity anchors
+* Same-image constraint
+* Observation quality
 
 ---
 
@@ -387,11 +387,11 @@ Persistent image identity must preserve the source path.
 
 First determine whether the apparent duplicates come from:
 
-- Old database state
-- Reprocessing
-- Job recreation
-- Architecture changes
-- Reusing a database with incompatible code
+* Old database state
+* Reprocessing
+* Job recreation
+* Architecture changes
+* Reusing a database with incompatible code
 
 For schema/persistence changes, use a fresh event database.
 
@@ -425,13 +425,13 @@ An empty person output can be a valid result when no cluster matches the event r
 
 Check:
 
-- Credentials path
-- OAuth token
-- Root folder configuration
-- Network access
-- Drive API permissions
-- Public-link configuration
-- Retry/timeout settings
+* Credentials path
+* OAuth token
+* Root folder configuration
+* Network access
+* Drive API permissions
+* Public-link configuration
+* Retry/timeout settings
 
 The local output should be checked first:
 
@@ -487,7 +487,7 @@ For development, use a fresh event/database when appropriate.
 
 # 24. Correct Diagnostic Checklist
 
-For an event named `EEA`:
+For an event named `EEA` :
 
 ```text
 [ ] data/events/EEA exists

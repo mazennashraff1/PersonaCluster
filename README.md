@@ -1,222 +1,274 @@
 # PersonaCluster
 
-### Event-Based Person Detection, Recognition, Clustering, Reference Matching, and Output
+### Event-Based Person Detection, Recognition, Clustering, Reference Matching, and Best-Image Selection
 
-PersonaCluster is an event-based computer-vision system for processing closed photographic events. It recursively discovers gallery images, detects people, extracts face and body representations, creates person observations, discovers anonymous identity clusters, matches those clusters against the event's reference people, and produces a structured final output.
+PersonaCluster is an event-based computer-vision system for processing collections of photographs from closed events.
 
-It is designed for:
+It discovers people in event photographs, creates person observations using face and body appearance information, groups observations into anonymous identity clusters, matches those clusters against provided reference images, and produces organized results for each matched person.
+
+Typical use cases include:
 
 * Conferences
 * Weddings
 * Parties
-* Sports events
 * Graduations
+* Sports events
 * Corporate events
-* Other closed event photo collections
+* Other closed event-based photo collections
 
-The system processes **one event at a time**, while `main.py` can process all event folders found under `data/events/` .
+PersonaCluster is designed for **event-level identity discovery**. It does not require a permanent named-person gallery or cross-event identity database.
 
 ---
 
-# 1. Current Directory Structure
+## Project Flow
 
-The current input layout is intentionally event-local:
+```text
+Event Photos
+     ↓
+Recursive Image Discovery
+     ↓
+Image Processing
+     ├── Person Detection
+     ├── Face Detection + Embedding
+     ├── Face/Person Association
+     ├── Face Pose Estimation
+     ├── Body/Re-ID Embedding
+     └── Quality Assessment
+     ↓
+Person Observations
+     ↓
+SQLite Event Database
+     ↓
+Constrained Identity Clustering
+     ↓
+Anonymous Identity Clusters
+     ↓
+Reference Matching
+     ↓
+Event Output
+     ├── All Images
+     ├── Best Images
+     └── Representative Face
+```
+
+The core design separates **image processing** from **identity discovery**:
+
+> Images are processed independently, then the complete event observation set is used for identity clustering.
+
+For the detailed architecture, see [ `architecture.md` ](docs/architecture.md).
+
+---
+
+# Key Features
+* Recursive event image discovery
+* Nested gallery directories
+* YOLO-based person detection
+* InsightFace face detection and embeddings
+* Face/person association
+* Face pose estimation
+* TorchReID/OSNet body appearance embeddings
+* Face and body quality assessment
+* Embedding validation
+* Face, body, and face+body observations
+* SQLite-backed processing state
+* Parallel image workers
+* Crash and stale-job recovery
+* Persistent event-level processing
+* Face-primary identity clustering
+* Quality-aware identity matching
+* Cross-pose matching
+* Identity anchors
+* Same-image identity constraints
+* Best-image selection
+* Representative-face generation
+* Reference-based final output
+* Excel result generation
+* Optional Google Drive upload
+* PersonaCluster Studio web interface
+
+---
+
+# Requirements
+
+Recommended environment:
+
+| Component | Recommendation         |
+| --------- | ---------------------- |
+| OS        | Windows 10/11 or Linux |
+| Python    | 3.10 or 3.11           |
+| RAM       | 16 GB or more          |
+| GPU       | NVIDIA GPU recommended |
+| Storage   | SSD recommended        |
+
+A GPU is strongly recommended for larger event collections.
+
+For GPUs with limited VRAM, start with a single worker.
+
+---
+
+# Environment Setup
+
+Create a virtual environment from the project root.
+
+### Windows
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### Linux / macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Upgrade the packaging tools:
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
+Install the project dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+If TorchReID is not installed by the requirements:
+
+```bash
+python -m pip install --no-build-isolation git+https://github.com/KaiyangZhou/deep-person-reid.git
+```
+
+---
+
+# Verify the Environment
+
+Check Python:
+
+```bash
+python --version
+```
+
+Check PyTorch and CUDA:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
+
+Check the main dependencies:
+
+```bash
+python -c "import numpy, cv2, PIL, scipy, torch, torchvision, ultralytics, insightface, onnxruntime, sklearn, skimage, matplotlib, yaml; print('All core dependencies imported successfully')"
+```
+
+Check TorchReID:
+
+```bash
+python -c "import torchreid; print('TorchReID imported successfully')"
+```
+
+---
+
+# Project Structure
+
+The main project structure is:
 
 ```text
 PersonaCluster/
 │
+├── app/
+│   ├── configuration.py
+│   ├── pipeline.py
+│   ├── models/
+│   ├── detection/
+│   ├── identity/
+│   ├── embeddings/
+│   ├── quality/
+│   ├── validation/
+│   ├── storage/
+│   ├── workers/
+│   ├── clustering/
+│   └── output/
+│
 ├── data/
 │   └── events/
-│       ├── EEA/
-│       │   ├── Gallery/
-│       │   │   ├── Camera 1/
-│       │   │   │   ├── Day 1/
-│       │   │   │   │   ├── IMG001.jpg
-│       │   │   │   │   └── IMG002.jpg
-│       │   │   │   └── Day 2/
-│       │   │   └── Camera 2/
-│       │   │       └── ...
-│       │   │
-│       │   └── reference/
-│       │       ├── Person 1 - 201xxxxxxxxx.jpg
-│       │       ├── Person 2 - 201xxxxxxxxx.jpg
-│       │       └── ...
-│       │
-│       ├── Event_2026/
-│       │   ├── Gallery/
-│       │   │   └── ...
-│       │   └── reference/
-│       │       └── ...
-│       │
-│       └── Wedding_September/
-│           ├── Gallery/
-│           │   └── ...
-│           └── reference/
-│               └── ...
 │
-├── output/
-│   ├── EEA/
-│   │   ├── Person 1/
-│   │   │   ├── All Images/
-│   │   │   ├── Best Images/
-│   │   │   └── representative Image.jpg
-│   │   └── Person 2/
-│   │       └── ...
-│   └── Event_2026/
-│       └── ...
+├── models/
+│   └── yolo11n.pt
 │
-├── app/
+├── credentials/
+│
+├── docs/
+│
+├── studio/
+│
 ├── main.py
-└── ...
+├── requirements.txt
+├── .env
+└── README.md
 ```
 
-### Input rules
-
-1. `data/events/` is the event container.
-2. Every direct child of `data/events/` is one event.
-3. Each event must contain a `Gallery/` directory.
-4. The entire tree below `Gallery/` is recursively searched for images.
-5. Each event has its own `reference/` directory.
-6. Reference images are never treated as gallery images.
-7. Different events may contain completely different reference people.
-8. Event state is stored in that event's own `event.db`.
-
-The old global `data/reference/` layout is no longer the event input model.
+The detailed responsibilities of these components are documented in [ `architecture.md` ](docs/architecture.md).
 
 ---
 
-# 2. End-to-End Workflow
+# Models and Technologies
+
+| Component           | Technology                    |
+| ------------------- | ----------------------------- |
+| Person detection    | Ultralytics YOLO11n           |
+| Face detection      | InsightFace                   |
+| Face embedding      | InsightFace `buffalo_l` |
+| Body / Re-ID        | TorchReID `osnet_x1_0` |
+| Face pose           | OpenCV `solvePnP` |
+| Image processing    | OpenCV / NumPy                |
+| Persistence         | SQLite                        |
+| Identity clustering | Custom constrained clustering |
+| Backend Studio      | FastAPI                       |
+| Frontend Studio     | React / Vite                  |
+
+---
+
+# Prepare an Event
+
+Events are stored under:
 
 ```text
 data/events/
-     │
-     ├── EEA/
-     ├── Event_2026/
-     └── Wedding_September/
-             │
-             ▼
-      Event Discovery
-             │
-             ▼
-       Gallery Discovery
-       (recursive only)
-             │
-             ▼
-       SQLite Job Queue
-             │
-             ▼
-       Parallel Workers
-             │
-             ├── Person Detection
-             ├── Face Detection + Embedding
-             ├── Face/Person Association
-             ├── Face Pose
-             ├── Body/Re-ID Embedding
-             ├── Quality
-             └── Embedding Validation
-             │
-             ▼
-       Person Observations
-             │
-             ▼
-        Event Database
-             │
-             ▼
-   Constrained Identity Clustering
-             │
-             ▼
-     Anonymous Clusters
-             │
-             ▼
-   Event Reference Matching
-             │
-             ▼
-      EventOutputManager
-             │
-             ├── All Images
-             ├── Best Images
-             └── Representative Image
-             │
-             ▼
-       output/<event_name>/
-             │
-             ├── Local Excel report
-             └── Optional Google Drive upload
 ```
 
-`main.py` repeats this workflow for every event discovered under `data/events/` .
+Each direct child represents an event.
 
----
-
-# 3. Event Processing
-
-An event is defined by its direct folder:
+Recommended structure:
 
 ```text
-data/events/EEA/
+data/
+└── events/
+    └── EEA/
+        ├── Gallery/
+        │   ├── Camera 1/
+        │   ├── Camera 2/
+        │   └── ...
+        │
+        └── reference/
+            ├── Person 1 - 201xxxxxxxxx.jpg
+            └── Person 2 - 201xxxxxxxxx.jpg
 ```
 
-The event name is:
+### Gallery
+
+Event photographs can be placed anywhere inside:
 
 ```text
-EEA
+data/events/<event_name>/Gallery/
 ```
 
-Its gallery is:
+Nested directories are supported.
 
-```text
-data/events/EEA/Gallery/
-```
-
-Its references are:
-
-```text
-data/events/EEA/reference/
-```
-
-Its persistent database is:
-
-```text
-data/events/EEA/event.db
-```
-
-Its final output is:
-
-```text
-output/EEA/
-```
-
-The same rules apply independently to every other event.
-
----
-
-# 4. Recursive Gallery Discovery
-
-Only the `Gallery/` directory is searched.
-
-For example:
-
-```text
-EEA/
-├── Gallery/
-│   ├── Camera A/
-│   │   ├── Morning/
-│   │   │   └── IMG001.jpg
-│   │   └── Evening/
-│   │       └── IMG002.jpg
-│   └── Camera B/
-│       └── Batch 01/
-│           └── Original/
-│               └── IMG003.jpg
-└── reference/
-    └── Person 1 - 201xxx.jpg
-```
-
-`IMG001.jpg` , `IMG002.jpg` , and `IMG003.jpg` belong to EEA.
-
-The reference image does not.
-
-Supported image formats are:
+Supported image formats include:
 
 ```text
 .jpg
@@ -228,263 +280,338 @@ Supported image formats are:
 .tiff
 ```
 
-Nested directory depth is unrestricted.
+### Reference Images
 
----
-
-# 5. Image Processing
-
-Each gallery image is processed independently.
-
-```text
-Image
-  │
-  ├── Person Detection
-  ├── Face Detection + Embedding
-  ├── Face/Person Association
-  ├── Face Pose Estimation
-  ├── Body/Re-ID Embedding
-  ├── Quality Calculation
-  └── Embedding Validation
-          │
-          ▼
-   PersonObservation
-```
-
-Workers do not perform global identity clustering.
-
----
-
-# 6. Persistent Event Memory
-
-Each event owns its own SQLite database:
-
-```text
-data/events/<event_name>/event.db
-```
-
-The persistent state includes image registration, image hashes, jobs, observations, cluster state, reference information, cluster/person matches, output artifacts, configuration snapshots, and processing metadata.
-
-The system is intended to avoid repeating work unnecessarily.
-
-### Reuse rules
-
-* New images are queued.
-* Unchanged completed images are skipped.
-* Changed images invalidate their previous image-level state and are processed again.
-* Stale processing jobs can be recovered.
-* Failed jobs can be retried.
-* Reference comparisons can be cached.
-* Clustering state can be reused when its inputs/configuration have not changed.
-
-A post-cluster recheck can requeue eligible images whose observations did not contribute to a cluster, subject to the configured retry policy.
-
----
-
-# 7. Identity Clustering
-
-Clustering happens only after event image processing.
-
-The clustering stage uses:
-
-* Face similarity
-* Body similarity
-* Quality
-* Pose context
-* Identity anchors
-* Same-image constraints
-
-Face is the primary identity signal.
-
-A same-image constraint prevents two observations from the same source image from being assigned to the same identity cluster.
-
-The resulting clusters are event-local anonymous identities until reference matching is applied.
-
----
-
-# 8. Event Reference Matching
-
-References are loaded from:
+Known-person reference images are placed in:
 
 ```text
 data/events/<event_name>/reference/
 ```
 
-Expected filename pattern:
+Use:
 
 ```text
 Person Name - Phone Number.ext
 ```
 
-The phone number is metadata. The person's name is used for the final output directory.
+as the filename format.
 
-A person can have multiple reference images.
-
-Reference matching happens after event-level clustering.
-
-One known person may correspond to multiple discovered clusters; the output manager aggregates the accepted clusters into one person directory.
+Reference images should **not** be placed inside `Gallery` .
 
 ---
 
-# 9. Final Output
+# Run PersonaCluster
 
-For:
-
-```text
-data/events/EEA/
-```
-
-the final output is:
-
-```text
-output/EEA/
-├── Person 1/
-│   ├── All Images/
-│   │   ├── ...
-│   │   └── ...
-│   ├── Best Images/
-│   │   ├── ...
-│   │   └── ...
-│   └── representative Image.jpg
-│
-└── Person 2/
-    ├── All Images/
-    ├── Best Images/
-    └── representative Image.jpg
-```
-
-The output is intentionally outside `data/events/<event>/` .
-
-The Excel report is generated locally:
-
-```text
-output/<event_name>/final_results.xlsx
-```
-
-The Excel file is not uploaded to Google Drive.
-
----
-
-# 10. Google Drive
-
-When enabled, Google Drive receives the generated event/person folders and images.
-
-The local output remains the source of truth for the final event result.
-
-The Google Drive integration can create:
-
-```text
-Event Results/
-└── <event_name>/
-    ├── Person 1/
-    └── Person 2/
-```
-
-The generated Excel report remains local.
-
----
-
-# 11. Running the Project
-
-Place events under:
-
-```text
-data/events/
-```
-
-For example:
-
-```text
-data/events/EEA/Gallery/
-data/events/EEA/reference/
-```
-
-Then run:
+From the project root:
 
 ```bash
 python main.py
 ```
 
-`main.py` discovers the event folders and processes them sequentially.
+The application discovers the available events and processes them.
+
+Processing state is maintained per event, allowing the system to work with persistent event databases and continue processing without unnecessarily repeating completed image work.
+
+For development, incremental processing, worker behavior, and recovery, see [ `development.md` ](docs/development.md).
 
 ---
 
-# 12. Important Separation of Responsibilities
+# Results
+
+Results are created under:
 
 ```text
-data/events/
-    = input + persistent event state
-
-data/events/<event>/Gallery/
-    = gallery images only
-
-data/events/<event>/reference/
-    = reference images only
-
-data/events/<event>/event.db
-    = persistent event processing state
-
-output/<event>/
-    = final human-facing output
+output/<event_name>/
 ```
 
-This separation is important because reference data, gallery data, database state, and generated output have different lifecycles.
+The active final-output workflow is reference matched, meaning only discovered clusters that can be matched to the supplied reference people are exported.
 
----
-
-# 13. Project Components
+Example:
 
 ```text
-app/
-├── configuration.py
-├── pipeline.py
-├── models/
-├── detection/
-├── identity/
-├── embeddings/
-├── quality/
-├── validation/
-├── storage/
-├── workers/
-├── clustering/
-├── output/
-└── googleDriveUploader.py
+output/
+└── EEA/
+    ├── Person 1/
+    │   ├── All Images/
+    │   ├── Best Images/
+    │   └── representative Image.jpg
+    │
+    ├── Person 2/
+    │   ├── All Images/
+    │   ├── Best Images/
+    │   └── representative Image.jpg
+    │
+    └── final_results.xlsx
 ```
 
-`main.py` is the event-level coordinator.
-
-`pipeline.py` processes one image.
-
-`eventStore.py` manages persistent event state.
-
-`constrainedClustering.py` performs event-level identity discovery.
-
-`referenceMatcher.py` matches discovered clusters to that event's reference people.
-
-`eventOutputManager.py` writes the final reference-matched output.
-
-`googleDriveUploader.py` handles optional Drive upload.
-
----
-
-# 14. GPU Runtime
-
-The active face and body models may use CUDA when the environment supports it.
-
-If ONNX Runtime reports:
+The Excel report contains:
 
 ```text
-Available providers: CPUExecutionProvider
+Name of Person
+Phone Number
+Folder Shared Link
 ```
 
-the application may fall back to CPU for InsightFace.
+The local output is the primary result of the application.
 
-Worker count should be chosen based on available RAM and VRAM. Multiple workers can create multiple model instances.
+Google Drive upload is optional.
 
 ---
 
-# 15. Design Principle
+# Google Drive
 
-The central design principle is:
+When enabled, PersonaCluster can upload the generated person folders and Excel report to Google Drive.
 
-> Gallery images belong to an event, references belong to that same event, processing state belongs to that event, and final output belongs to the event at the project-level `output/<event_name>/` directory.
+The Drive output follows the event/person structure:
+
+```text
+Event Results/
+└── Event Name/
+    ├── Person Name/
+    │   ├── All Images/
+    │   ├── Best Images/
+    │   └── representative Image.jpg
+    │
+    ├── Another Person/
+    │   ├── All Images/
+    │   ├── Best Images/
+    │   └── representative Image.jpg
+    │
+    └── final_results.xlsx
+```
+
+When public sharing is enabled, the generated person-folder links are written to the Excel report.
+
+Drive configuration is documented in [ `configuration.md` ](docs/configuration.md).
+
+---
+
+# PersonaCluster Studio
+
+PersonaCluster includes **Studio**, a local web interface for controlling the project.
+
+Studio provides:
+
+* Dashboard
+* Event creation
+* Processing controls
+* Run monitoring
+* Results viewing
+* Configuration editing
+
+Studio is located in:
+
+```text
+studio/
+```
+
+Install the backend dependencies:
+
+```powershell
+.venv\Scripts\activate
+pip install -r studio\backend\requirements.txt
+```
+
+Install the frontend dependencies:
+
+```powershell
+cd studio\frontend
+npm install
+cd ..
+```
+
+Start Studio:
+
+```powershell
+python run_studio.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:5173
+```
+
+Studio-specific instructions are available in [ `studio/README.md` ](studio/README.md).
+
+---
+
+# Configuration
+
+Project configuration is centralized in:
+
+```text
+app/configuration.py
+```
+
+Environment-specific and secret values can be provided through:
+
+```text
+.env
+```
+
+Configuration includes areas such as:
+
+* Detection
+* Face processing
+* Body/Re-ID
+* Quality
+* Pose
+* Identity clustering
+* Reference matching
+* Output
+* Workers
+* Google Drive
+
+Do not use the README as the source of truth for individual thresholds or tuning values.
+
+See [ `configuration.md` ](docs/configuration.md) for the current configuration reference.
+
+---
+
+# Documentation
+
+The root README intentionally provides only the information needed to understand, install, and run the project.
+
+Use the dedicated documentation for deeper information:
+
+| Document                                        | Purpose                                                     |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| [ `architecture.md` ](docs/architecture.md)       | System architecture and component responsibilities          |
+| [ `clustering.md` ](docs/clustering.md)           | Identity clustering and matching logic                      |
+| [ `configuration.md` ](docs/configuration.md)     | Configuration and tunable parameters                        |
+| [ `development.md` ](docs/development.md)         | Development, persistence, workers, recovery, and validation |
+| [ `evaluation.md` ](docs/evaluation.md)           | Evaluation methodology and metrics                          |
+| [ `troubleshooting.md` ](docs/troubleshooting.md) | Common problems and diagnostic steps                        |
+| [ `studio/README.md` ](studio/README.md)          | PersonaCluster Studio                                       |
+
+---
+
+# Limitations
+
+PersonaCluster is intentionally an **event-level identity discovery system**.
+
+Current limitations include:
+
+* Identity clusters are anonymous until matched or labeled.
+* Cross-event identity recognition is not part of the core architecture.
+* Face visibility and image quality affect matching quality.
+* Body appearance can change between photographs.
+* Clustering thresholds require calibration for different datasets.
+* Very large-scale approximate nearest-neighbor retrieval is not required by the current core implementation.
+* The system should not be treated as a universal biometric identification system.
+
+---
+
+# Privacy and Security
+
+PersonaCluster may process photographs containing identifiable people and generate face and body appearance embeddings.
+
+Do not commit the following to a public repository:
+
+```text
+Real event photographs
+Real event databases
+Face embeddings
+Body embeddings
+Generated private output
+API keys
+Passwords
+Access tokens
+Private configuration
+```
+
+Use synthetic, consented, or appropriately licensed sample data when demonstrating the project.
+
+Review the licenses and terms of the underlying models and dependencies before distributing the project.
+
+---
+
+# License
+
+```text
+MIT License
+```
+
+---
+
+# Acknowledgements
+
+PersonaCluster builds on open-source projects including:
+
+* Ultralytics
+* InsightFace
+* TorchReID / Deep-Person-ReID
+* PyTorch
+* OpenCV
+* NumPy
+* scikit-learn
+
+Please review the licenses and terms of the individual dependencies before distribution.
+
+---
+
+# Project Philosophy
+
+> **Do not ask clustering to compensate for bad observations.**
+
+The system follows this general principle:
+
+```text
+Reliable Detection
+       ↓
+Reliable Observations
+       ↓
+Reliable Persistence
+       ↓
+Constrained Identity Clustering
+       ↓
+Useful Image Selection
+       ↓
+Clear Final Output
+```
+
+The detailed implementation decisions behind this philosophy are documented in the supporting documentation.
+
+---
+
+# Quick Start
+
+```powershell
+# Create environment
+python -m venv .venv
+
+# Activate
+.venv\Scripts\activate
+
+# Install dependencies
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+
+# Prepare:
+# data/events/<event>/Gallery/
+# data/events/<event>/reference/
+
+# Run
+python main.py
+```
+
+Then check:
+
+```text
+output/<event_name>/
+```
+
+---
+
+## Project Entry Point
+
+If you are new to PersonaCluster:
+
+1. Set up the Python environment.
+2. Prepare an event under `data/events/`.
+3. Add the gallery images.
+4. Add reference images if reference matching is required.
+5. Run `python main.py`.
+6. Check `output/<event_name>/`.
+7. Use the supporting documentation when you need to understand or modify a specific part of the system.

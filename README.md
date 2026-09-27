@@ -1,10 +1,10 @@
 # PersonaCluster
 
-### Event-Based Person Detection, Recognition, Clustering, and Best-Image Selection
+### Event-Based Person Detection, Recognition, Clustering, Reference Matching, and Output
 
-PersonaCluster is an event-based computer-vision system that processes collections of photographs, detects people, extracts face and body appearance representations, creates quality-aware person observations, discovers anonymous identity clusters, and generates a structured output containing all images, selected best images, and a representative face for each discovered identity.
+PersonaCluster is an event-based computer-vision system for processing closed photographic events. It recursively discovers gallery images, detects people, extracts face and body representations, creates person observations, discovers anonymous identity clusters, matches those clusters against the event's reference people, and produces a structured final output.
 
-It is designed for **closed photographic events** such as:
+It is designed for:
 
 * Conferences
 * Weddings
@@ -12,160 +12,211 @@ It is designed for **closed photographic events** such as:
 * Sports events
 * Graduations
 * Corporate events
-* Other event-based photo collections
+* Other closed event photo collections
 
-PersonaCluster does **not** require a permanent named-person gallery. Instead, it discovers anonymous person clusters within an event that can be reviewed and labeled afterward.
+The system processes **one event at a time**, while `main.py` can process all event folders found under `data/events/` .
 
 ---
 
-## Overview
+# 1. Current Directory Structure
 
-The system separates **image processing** from **identity discovery**.
-
-Each image is processed independently to produce structured person observations. After image processing is complete, the complete event observation set is passed to constrained identity clustering.
+The current input layout is intentionally event-local:
 
 ```text
-Event Images
-     │
-     ▼
-Recursive Image Discovery
-     │
-     ▼
-SQLite Job Queue
-     │
-     ▼
-Parallel Image Workers
-     │
-     ├── Person Detection
-     ├── Face Detection + Embedding
-     ├── Face/Person Association
-     ├── Face Pose Estimation
-     ├── Body/Re-ID Embedding
-     ├── Quality Assessment
-     └── Embedding Validation
-     │
-     ▼
-Person Observations
-     │
-     ▼
-SQLite Event Database
-     │
-     ▼
-Constrained Identity Clustering
-     │
-     ├── Face Similarity
-     ├── Body Similarity
-     ├── Quality
-     ├── Pose-Aware Matching
-     ├── Identity Anchors
-     └── Same-Image Constraints
-     │
-     ▼
-Cluster Assignments
-     │
-     ▼
-EventOutputManager
-     │
-     ├── All Images
-     ├── Best Images
-     └── Representative Face
-     │
-     ▼
-Final Event Output
+PersonaCluster/
+│
+├── data/
+│   └── events/
+│       ├── EEA/
+│       │   ├── Gallery/
+│       │   │   ├── Camera 1/
+│       │   │   │   ├── Day 1/
+│       │   │   │   │   ├── IMG001.jpg
+│       │   │   │   │   └── IMG002.jpg
+│       │   │   │   └── Day 2/
+│       │   │   └── Camera 2/
+│       │   │       └── ...
+│       │   │
+│       │   └── reference/
+│       │       ├── Person 1 - 201xxxxxxxxx.jpg
+│       │       ├── Person 2 - 201xxxxxxxxx.jpg
+│       │       └── ...
+│       │
+│       ├── Event_2026/
+│       │   ├── Gallery/
+│       │   │   └── ...
+│       │   └── reference/
+│       │       └── ...
+│       │
+│       └── Wedding_September/
+│           ├── Gallery/
+│           │   └── ...
+│           └── reference/
+│               └── ...
+│
+├── output/
+│   ├── EEA/
+│   │   ├── Person 1/
+│   │   │   ├── All Images/
+│   │   │   ├── Best Images/
+│   │   │   └── representative Image.jpg
+│   │   └── Person 2/
+│   │       └── ...
+│   └── Event_2026/
+│       └── ...
+│
+├── app/
+├── main.py
+└── ...
 ```
 
-The core architectural principle is:
+### Input rules
 
-> **Image processing happens independently per image; identity clustering happens only after the event observations are available.**
+1. `data/events/` is the event container.
+2. Every direct child of `data/events/` is one event.
+3. Each event must contain a `Gallery/` directory.
+4. The entire tree below `Gallery/` is recursively searched for images.
+5. Each event has its own `reference/` directory.
+6. Reference images are never treated as gallery images.
+7. Different events may contain completely different reference people.
+8. Event state is stored in that event's own `event.db`.
 
----
-
-# Key Features
-* Recursive event image discovery
-* Support for nested image directories
-* YOLO-based person detection
-* InsightFace face detection and face embeddings
-* Face-to-person association
-* Coarse face pose estimation
-* TorchReID/OSNet body appearance embeddings
-* Face and body quality scoring
-* Embedding validation
-* Face-only, body-only, and face+body observations
-* SQLite-backed image processing queue
-* Multiprocessing image workers
-* Crash and stale-job recovery
-* Globally unique observation IDs
-* Atomic observation persistence
-* Face-primary identity clustering
-* Quality-aware identity matching
-* Cross-pose matching
-* Identity anchor requirements
-* Same-image identity constraints
-* Best-image selection
-* Representative-face generation
-* Configurable event output
-* Human-review-ready anonymous identity clusters
+The old global `data/reference/` layout is no longer the event input model.
 
 ---
 
-# Architecture
-
-PersonaCluster is divided into five logical layers:
+# 2. End-to-End Workflow
 
 ```text
-┌─────────────────────────────────────────────┐
-│ Image Processing                            │
-│ Detection → Association → Embeddings        │
-└──────────────────────┬──────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────┐
-│ Observation & Quality                       │
-│ Pose + Quality + Validation                 │
-└──────────────────────┬──────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────┐
-│ Persistence                                 │
-│ SQLite Jobs + Observations                  │
-└──────────────────────┬──────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────┐
-│ Identity Discovery                          │
-│ Constrained Identity Clustering             │
-└──────────────────────┬──────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────┐
-│ Output                                      │
-│ All Images + Best Images + Representative   │
-│ Face                                        │
-└─────────────────────────────────────────────┘
+data/events/
+     │
+     ├── EEA/
+     ├── Event_2026/
+     └── Wedding_September/
+             │
+             ▼
+      Event Discovery
+             │
+             ▼
+       Gallery Discovery
+       (recursive only)
+             │
+             ▼
+       SQLite Job Queue
+             │
+             ▼
+       Parallel Workers
+             │
+             ├── Person Detection
+             ├── Face Detection + Embedding
+             ├── Face/Person Association
+             ├── Face Pose
+             ├── Body/Re-ID Embedding
+             ├── Quality
+             └── Embedding Validation
+             │
+             ▼
+       Person Observations
+             │
+             ▼
+        Event Database
+             │
+             ▼
+   Constrained Identity Clustering
+             │
+             ▼
+     Anonymous Clusters
+             │
+             ▼
+   Event Reference Matching
+             │
+             ▼
+      EventOutputManager
+             │
+             ├── All Images
+             ├── Best Images
+             └── Representative Image
+             │
+             ▼
+       output/<event_name>/
+             │
+             ├── Local Excel report
+             └── Optional Google Drive upload
 ```
 
-The system deliberately avoids maintaining shared identity state between
-image workers.
-
-```text
-Worker 1 ──┐
-Worker 2 ──┤
-Worker 3 ──┼──► Person Observations ──► Event-Level Clustering
-Worker N ──┘
-```
-
-This allows image processing to run in parallel while identity discovery
-remains centralized at the event level.
+`main.py` repeats this workflow for every event discovered under `data/events/` .
 
 ---
 
-# How It Works
+# 3. Event Processing
 
-## 1. Image Discovery
+An event is defined by its direct folder:
 
-Images are discovered recursively inside the configured event directory.
+```text
+data/events/EEA/
+```
 
-Supported formats include:
+The event name is:
+
+```text
+EEA
+```
+
+Its gallery is:
+
+```text
+data/events/EEA/Gallery/
+```
+
+Its references are:
+
+```text
+data/events/EEA/reference/
+```
+
+Its persistent database is:
+
+```text
+data/events/EEA/event.db
+```
+
+Its final output is:
+
+```text
+output/EEA/
+```
+
+The same rules apply independently to every other event.
+
+---
+
+# 4. Recursive Gallery Discovery
+
+Only the `Gallery/` directory is searched.
+
+For example:
+
+```text
+EEA/
+├── Gallery/
+│   ├── Camera A/
+│   │   ├── Morning/
+│   │   │   └── IMG001.jpg
+│   │   └── Evening/
+│   │       └── IMG002.jpg
+│   └── Camera B/
+│       └── Batch 01/
+│           └── Original/
+│               └── IMG003.jpg
+└── reference/
+    └── Person 1 - 201xxx.jpg
+```
+
+`IMG001.jpg` , `IMG002.jpg` , and `IMG003.jpg` belong to EEA.
+
+The reference image does not.
+
+Supported image formats are:
 
 ```text
 .jpg
@@ -177,1138 +228,263 @@ Supported formats include:
 .tiff
 ```
 
-Nested directories are supported.
-
-Example:
-
-```text
-event_001/
-├── morning/
-│   ├── IMG_001.jpg
-│   └── IMG_002.jpg
-├── ceremony/
-│   └── IMG_003.jpg
-└── reception/
-    └── camera_A/
-        └── IMG_004.jpg
-```
+Nested directory depth is unrestricted.
 
 ---
 
-## 2. Image Processing
+# 5. Image Processing
 
-Each image is processed independently by an `ImageWorker` .
-
-The active image pipeline is:
+Each gallery image is processed independently.
 
 ```text
 Image
   │
-  ├──► Person Detection
-  │
-  ├──► Face Detection + Embedding
-  │
-  ├──► Face/Person Association
-  │
-  ├──► Face Pose Estimation
-  │
-  ├──► Body/Re-ID Embedding
-  │
-  ├──► Quality Calculation
-  │
-  └──► Embedding Validation
-           │
-           ▼
-     PersonObservation
+  ├── Person Detection
+  ├── Face Detection + Embedding
+  ├── Face/Person Association
+  ├── Face Pose Estimation
+  ├── Body/Re-ID Embedding
+  ├── Quality Calculation
+  └── Embedding Validation
+          │
+          ▼
+   PersonObservation
 ```
 
 Workers do not perform global identity clustering.
 
 ---
 
-## 3. Person Observations
+# 6. Persistent Event Memory
 
-A `PersonObservation` represents a detected occurrence of a person in a
-single image.
-
-It is **not** a confirmed identity.
-
-An observation can contain:
+Each event owns its own SQLite database:
 
 ```text
-Face + Body
-Face only
-Body only
+data/events/<event_name>/event.db
 ```
 
-An observation stores information such as:
+The persistent state includes image registration, image hashes, jobs, observations, cluster state, reference information, cluster/person matches, output artifacts, configuration snapshots, and processing metadata.
 
-* Observation ID
-* Source image
-* Person bounding box
-* Person detection confidence
-* Face bounding box
-* Face detection confidence
-* Face pose
-* Face embedding
-* Body embedding
-* Face quality
-* Body quality
-* Embedding validity
-* Cluster assignment
+The system is intended to avoid repeating work unnecessarily.
 
-This separation keeps detection, representation, quality assessment, and
-identity discovery as separate responsibilities.
+### Reuse rules
+
+* New images are queued.
+* Unchanged completed images are skipped.
+* Changed images invalidate their previous image-level state and are processed again.
+* Stale processing jobs can be recovered.
+* Failed jobs can be retried.
+* Reference comparisons can be cached.
+* Clustering state can be reused when its inputs/configuration have not changed.
+
+A post-cluster recheck can requeue eligible images whose observations did not contribute to a cluster, subject to the configured retry policy.
 
 ---
 
-# Face and Body Representation
+# 7. Identity Clustering
 
-PersonaCluster uses two complementary appearance modalities:
+Clustering happens only after event image processing.
 
-```text
-                  Person
-                    │
-           ┌────────┴────────┐
-           ▼                 ▼
-         Face              Body
-           │                 │
-           ▼                 ▼
-    Face Embedding      OSNet Embedding
-```
-
-## Face
-
-InsightFace provides:
-
-* Face detection
-* Facial landmarks
-* Face embeddings
-
-Face embeddings are L2-normalized before being used by the identity
-clustering system.
-
-The face representation is the **primary identity signal**.
-
-## Body
-
-The system extracts an upper-body region from the detected person
-bounding box and generates an appearance embedding using TorchReID and
-OSNet.
-
-Body appearance is used as **supporting identity evidence**.
-
-This is important because clothing and body appearance can change between
-photographs.
-
----
-
-# Face Pose Estimation
-
-Face pose is estimated from the facial landmarks produced by InsightFace
-using OpenCV's `solvePnP` .
-
-The system estimates:
-
-```text
-Yaw
-Pitch
-Roll
-```
-
-and assigns a coarse pose category:
-
-```text
-frontal
-left
-right
-profile
-unknown
-```
-
-Pose information is used for:
-
-* Pose-aware identity matching
-* Cross-view comparison
-* Representative-face selection
-* Cluster refinement
-
-Pose is treated as contextual evidence rather than a direct identity
-signal.
-
----
-
-# Quality Assessment
-
-Face and body observations receive independent quality scores.
-
-Quality considers factors such as:
-
-```text
-Detection confidence
-Bounding-box resolution
-Image sharpness
-```
-
-Quality values are normalized to:
-
-```text
-0.0 ─────────────── 1.0
-poor                strong
-```
-
-Quality influences identity matching and output selection but does not
-independently determine identity.
-
----
-
-# Identity Clustering
-
-After image processing is complete, PersonaCluster loads the persisted
-event observations and performs constrained identity clustering.
-
-```text
-All Observations
-       │
-       ▼
-Constrained Identity Clustering
-       │
-       ▼
-Anonymous Identity Clusters
-```
-
-The clustering system uses:
+The clustering stage uses:
 
 * Face similarity
 * Body similarity
-* Observation quality
-* Facial pose
+* Quality
+* Pose context
 * Identity anchors
 * Same-image constraints
 
-Face remains the primary identity signal.
+Face is the primary identity signal.
 
-The clustering strategy is intentionally conservative.
+A same-image constraint prevents two observations from the same source image from being assigned to the same identity cluster.
 
-The goal is:
-
-```text
-High precision
-     >
-Maximum recall
-```
-
-A false merge can contaminate an entire identity cluster, so uncertain
-observations may remain separated until stronger evidence becomes
-available.
+The resulting clusters are event-local anonymous identities until reference matching is applied.
 
 ---
 
-# Same-Image Constraint
+# 8. Event Reference Matching
 
-Two different observations originating from the same source image cannot
-be assigned to the same identity cluster.
-
-For example:
+References are loaded from:
 
 ```text
-IMG_001.jpg
-
-Person A
-Person B
-Person C
+data/events/<event_name>/reference/
 ```
 
-must not result in:
-
-```text
-Cluster 1
-├── Observation A
-└── Observation B
-```
-
-when those observations represent different detected people from the
-same image.
-
-This is a hard clustering constraint and an important correctness rule.
-
-There is **no separate duplicate-suppression stage** in the current
-architecture.
-
----
-
-# Identity Anchors
-
-PersonaCluster uses trusted identity anchors to establish strong
-candidate identities.
-
-The anchor concept is based on:
-
-* Good face quality
-* Strong face detection confidence
-* Sufficient face resolution
-* Approximately frontal face pose
-
-Conceptually:
-
-```text
-Clear
-  +
-Sufficiently large
-  +
-High-quality face
-  +
-Approximately frontal
-        │
-        ▼
-  Trusted Anchor
-```
-
-This prevents weak profile or side-view observations from independently
-establishing an identity when they do not satisfy the anchor
-requirements.
-
-Once an identity has a trusted anchor, observations from different poses
-can contribute to that identity.
-
----
-
-# Cross-Pose Matching
-
-The clustering system supports matching observations across different
-facial viewpoints.
-
-Standard same-pose matching can use stronger requirements, while
-cross-pose matching uses dedicated thresholds.
-
-For example:
-
-```text
-Frontal
-   │
-   ├──► Left
-   ├──► Right
-   └──► Profile
-```
-
-This allows the system to connect observations of the same person across
-different viewpoints without treating weak cross-pose evidence as
-equivalent to a strong frontal comparison.
-
-Cross-pose matching is controlled through the configuration values in:
-
-```text
-app/configuration.py
-```
-
----
-
-# Best Image Selection
-
-After identity clustering, `EventOutputManager` selects strong source
-images for each discovered identity.
-
-The selection process considers:
-
-* Face quality
-* Face detection confidence
-* Person detection confidence
-* Face/person association
-* Pose diversity
-
-The selector does **not** change cluster assignments.
-
-Conceptually:
-
-```text
-Cluster
-   │
-   ▼
-Candidate Images
-   │
-   ▼
-Quality + Confidence + Pose Diversity
-   │
-   ▼
-Best Images
-```
-
-Selected images are written to:
-
-```text
-clusterXX/bestImages/
-```
-
-Best-image selection is part of `EventOutputManager` ; there is no
-separate `BestImageSelector` module in the current project.
-
----
-
-# Representative Face
-
-`EventOutputManager` also selects a single representative face for each
-cluster.
-
-The representative face is selected using face quality and face
-detection confidence.
-
-The resulting crop is stored directly inside the cluster directory:
-
-```text
-cluster01/
-└── face.jpg
-```
-
-The representative face is an output artifact and does not modify the
-identity clustering result.
-
----
-
-# Final Event Output
-
-The active final-output mode is **reference matched**.
-
-After identity clustering, the system matches discovered clusters against the
-known people in `data/reference`. Only matched people are exported.
-
-Reference files use:
+Expected filename pattern:
 
 ```text
 Person Name - Phone Number.ext
 ```
 
-The person's name becomes the output folder name and the phone number is used
-in the final Excel report.
+The phone number is metadata. The person's name is used for the final output directory.
 
-The local output structure is:
+A person can have multiple reference images.
+
+Reference matching happens after event-level clustering.
+
+One known person may correspond to multiple discovered clusters; the output manager aggregates the accepted clusters into one person directory.
+
+---
+
+# 9. Final Output
+
+For:
 
 ```text
-output/
-├── Person Name/
+data/events/EEA/
+```
+
+the final output is:
+
+```text
+output/EEA/
+├── Person 1/
 │   ├── All Images/
+│   │   ├── ...
+│   │   └── ...
 │   ├── Best Images/
+│   │   ├── ...
+│   │   └── ...
 │   └── representative Image.jpg
 │
-└── final_results.xlsx
+└── Person 2/
+    ├── All Images/
+    ├── Best Images/
+    └── representative Image.jpg
 ```
 
-If multiple discovered clusters belong to the same reference person, their
-images are combined into the same person directory.
+The output is intentionally outside `data/events/<event>/` .
 
-## Final Excel Report
-
-`final_results.xlsx` contains exactly these columns:
+The Excel report is generated locally:
 
 ```text
-Name of Person | Phone Number | Folder Shared Link
+output/<event_name>/final_results.xlsx
 ```
 
-The report is generated after the person folders are built.
+The Excel file is not uploaded to Google Drive.
 
-When Google Drive is enabled, the application uploads each person folder,
-obtains its Drive folder link, writes that link into the Excel report, and
-then uploads the completed Excel file to the event folder.
+---
 
-## Google Drive Output
+# 10. Google Drive
 
-The Google Drive structure is:
+When enabled, Google Drive receives the generated event/person folders and images.
+
+The local output remains the source of truth for the final event result.
+
+The Google Drive integration can create:
 
 ```text
 Event Results/
-└── Event Name/
-    ├── Person Name/
-    │   ├── All Images/
-    │   ├── Best Images/
-    │   └── representative Image.jpg
-    ├── Another Person/
-    │   ├── All Images/
-    │   ├── Best Images/
-    │   └── representative Image.jpg
-    └── final_results.xlsx
+└── <event_name>/
+    ├── Person 1/
+    └── Person 2/
 ```
 
-When `GOOGLE_DRIVE_PUBLIC_LINK=true`, each person's folder is shared using an
-"Anyone with the link" viewer permission. The resulting folder URL is written
-to the `Folder Shared Link` column.
-
-There is **no `manifest.json`** in the current output.
+The generated Excel report remains local.
 
 ---
 
-# Project Structure
+# 11. Running the Project
 
-The current active project structure is:
+Place events under:
 
 ```text
-PersonaCluster/
-│
-├── app/
-│   ├── configuration.py
-│   ├── pipeline.py
-│   │
-│   ├── models/
-│   │   ├── detector.py
-│   │   └── observation.py
-│   │
-│   ├── detection/
-│   │   ├── personDetector.py
-│   │   ├── faceDetector.py
-│   │   └── association.py
-│   │
-│   ├── identity/
-│   │   └── facePoseEstimator.py
-│   │
-│   ├── embeddings/
-│   │   └── bodyEncoder.py
-│   │
-│   ├── quality/
-│   │   └── qualityCalculator.py
-│   │
-│   ├── validation/
-│   │   └── embeddingValidator.py
-│   │
-│   ├── storage/
-│   │   └── eventStore.py
-│   │
-│   ├── workers/
-│   │   └── imageWorker.py
-│   │
-│   ├── clustering/
-│   │   └── constrainedClustering.py
-│   │
-│   └── output/
-│       └── eventOutputManager.py
-│
-├── data/
-│   └── events/
-│
-├── models/
-│   └── yolo11n.pt
-│
-├── docs/
-│   └── ...
-│
-├── main.py
-├── requirements.txt
-└── README.md
+data/events/
 ```
 
----
-
-# Models and Technologies
-
-| Component | Model / Technology |
-|---|---|
-| Person detection | Ultralytics YOLO11n |
-| Face detection | InsightFace |
-| Face embedding | InsightFace `buffalo_l` |
-| Body/Re-ID | TorchReID `osnet_x1_0` |
-| Face pose | OpenCV `solvePnP` |
-| Persistence | SQLite |
-| Image processing | OpenCV / NumPy |
-| Identity clustering | Custom constrained clustering |
-
----
-
-# Requirements
-
-Recommended environment:
+For example:
 
 ```text
-OS:
-    Windows 10/11 or Linux
-
-Python:
-    3.10 or 3.11
-
-RAM:
-    16 GB or more recommended
-
-GPU:
-    NVIDIA GPU recommended for large events
-
-Storage:
-    SSD recommended
+data/events/EEA/Gallery/
+data/events/EEA/reference/
 ```
 
-CPU execution may be possible depending on the configured models, but
-large image collections will generally be significantly slower.
-
----
-
-# Installation
-
-## 1. Clone the Repository
-
-```bash
-git clone <YOUR_REPOSITORY_URL>
-cd PersonaCluster
-```
-
-## 2. Create a Virtual Environment
-
-### Windows
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-### Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-## 3. Upgrade Packaging Tools
-
-```bash
-python -m pip install --upgrade pip setuptools wheel
-```
-
-## 4. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-## 5. Install TorchReID
-
-If TorchReID is not already installed:
-
-```bash
-python -m pip install --no-build-isolation git+https://github.com/KaiyangZhou/deep-person-reid.git
-```
-
----
-
-# Verify the Environment
-
-## Verify PyTorch and CUDA
-
-```bash
-python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
-```
-
-## Verify Core Dependencies
-
-```bash
-python -c "import numpy, cv2, PIL, scipy, torch, torchvision, ultralytics, insightface, onnxruntime, sklearn, skimage, matplotlib, yaml; print('All core dependencies imported successfully')"
-```
-
-Verify TorchReID separately:
-
-```bash
-python -c "import torchreid; print('TorchReID imported successfully')"
-```
-
----
-
-# Model Configuration
-
-The person detector currently uses:
-
-```text
-models/yolo11n.pt
-```
-
-The configured appearance models are:
-
-```text
-InsightFace:
-    buffalo_l
-
-TorchReID:
-    osnet_x1_0
-```
-
-Model and device settings are centralized in:
-
-```text
-app/configuration.py
-```
-
----
-
-# Configuration
-
-Project parameters are centralized in:
-
-```text
-app/configuration.py
-```
-
-Configuration covers:
-
-* Person detection
-* Face detection
-* Face/person association
-* Body extraction
-* Face quality
-* Body quality
-* Identity clustering
-* Face pose
-* Cross-pose matching
-* Identity anchors
-* Best-image selection
-* Representative-face selection
-* Worker configuration
-* Event output
-
-Example:
-
-```python
-PERSON_DETECTION_THRESHOLD = 0.40
-FACE_DETECTION_THRESHOLD = 0.40
-ASSOCIATION_MIN_SCORE = 0.30
-
-CLUSTER_FACE_WEIGHT = 0.65
-CLUSTER_BODY_WEIGHT = 0.20
-CLUSTER_QUALITY_WEIGHT = 0.15
-
-MIN_FACE_SIMILARITY = 0.55
-MERGE_THRESHOLD = 0.78
-
-WORKER_USE_PROCESSES = True
-
-EVENT_OUTPUT_MODE = "REFERENCE_MATCHED"
-```
-
-Thresholds are **project-specific configuration values**, not universal
-biometric thresholds. They should be calibrated against representative
-datasets.
-
----
-
-# Running the Project
-
-Place event photographs inside the configured event directory and run:
+Then run:
 
 ```bash
 python main.py
 ```
 
-The application performs the complete event pipeline:
-
-```text
-Image Discovery
-      ↓
-Job Preparation
-      ↓
-Image Workers
-      ↓
-Observation Persistence
-      ↓
-Identity Clustering
-      ↓
-Cluster Assignments
-      ↓
-EventOutputManager
-      ↓
-All Images
-Best Images
-Representative Face
-```
+`main.py` discovers the event folders and processes them sequentially.
 
 ---
 
-# Event Directory
-
-An event can be organized as:
+# 12. Important Separation of Responsibilities
 
 ```text
-data/
-└── events/
-    └── event_001/
-        ├── IMG_0001.jpg
-        ├── IMG_0002.jpg
-        ├── IMG_0003.jpg
-        └── ...
+data/events/
+    = input + persistent event state
+
+data/events/<event>/Gallery/
+    = gallery images only
+
+data/events/<event>/reference/
+    = reference images only
+
+data/events/<event>/event.db
+    = persistent event processing state
+
+output/<event>/
+    = final human-facing output
 ```
 
-Nested directories are also supported:
-
-```text
-data/
-└── events/
-    └── event_001/
-        ├── morning/
-        │   ├── IMG_0001.jpg
-        │   └── IMG_0002.jpg
-        │
-        └── reception/
-            ├── IMG_0100.jpg
-            └── IMG_0101.jpg
-```
-
-Each event maintains its own processing state and output.
+This separation is important because reference data, gallery data, database state, and generated output have different lifecycles.
 
 ---
 
-# Multiprocessing
-
-PersonaCluster uses multiprocessing for image processing.
-
-Each worker owns its own:
+# 13. Project Components
 
 ```text
-SQLite connection
-PersonPipeline
-YOLO model
-InsightFace model
-OSNet model
+app/
+├── configuration.py
+├── pipeline.py
+├── models/
+├── detection/
+├── identity/
+├── embeddings/
+├── quality/
+├── validation/
+├── storage/
+├── workers/
+├── clustering/
+├── output/
+└── googleDriveUploader.py
 ```
 
-Workers communicate through the SQLite-backed image-job queue rather than
-sharing ML model instances.
+`main.py` is the event-level coordinator.
 
-This provides process isolation but increases memory and VRAM usage.
+`pipeline.py` processes one image.
 
-For GPUs with limited memory, start with:
+`eventStore.py` manages persistent event state.
 
-```python
-WORKER_COUNT = 1
-```
+`constrainedClustering.py` performs event-level identity discovery.
 
-and benchmark before increasing the number of workers.
+`referenceMatcher.py` matches discovered clusters to that event's reference people.
+
+`eventOutputManager.py` writes the final reference-matched output.
+
+`googleDriveUploader.py` handles optional Drive upload.
 
 ---
 
-# Job Processing and Crash Recovery
+# 14. GPU Runtime
 
-Image jobs are tracked in SQLite.
+The active face and body models may use CUDA when the environment supports it.
 
-The general lifecycle is:
-
-```text
-PENDING
-   ↓
-PROCESSING
-   ↓
-COMPLETED
-```
-
-or:
+If ONNX Runtime reports:
 
 ```text
-PROCESSING
-   ↓
-FAILED
+Available providers: CPUExecutionProvider
 ```
 
-If a worker terminates unexpectedly, a job can remain in:
+the application may fall back to CPU for InsightFace.
 
-```text
-PROCESSING
-```
-
-for longer than the configured stale-job timeout.
-
-Stale jobs can then be recovered and returned to:
-
-```text
-PENDING
-```
-
-for processing again.
-
-The timeout is controlled by:
-
-```python
-WORKER_STALE_TIMEOUT_SECONDS
-```
+Worker count should be chosen based on available RAM and VRAM. Multiple workers can create multiple model instances.
 
 ---
 
-# Data Persistence
+# 15. Design Principle
 
-Each event maintains its own SQLite database.
+The central design principle is:
 
-The database stores processing state including:
-
-```text
-Image jobs
-Person observations
-Cluster assignments
-```
-
-SQLite provides the persistent coordination layer between image workers
-and the event-level identity-discovery stage.
-
----
-
-# Evaluation
-
-PersonaCluster should be evaluated at multiple levels.
-
-### Detection
-
-* Person detection precision
-* Person detection recall
-* Missed detections
-* False detections
-
-### Observation Quality
-
-* Valid face rate
-* Valid body rate
-* Invalid embedding rate
-* Face quality
-* Body quality
-* Association quality
-
-### Identity Clustering
-
-* Cluster purity
-* False merge rate
-* Identity fragmentation
-* Unknown observations
-* Same-image constraint violations
-
-### Output Quality
-
-* Best-image quality
-* Pose diversity
-* Representative-face quality
-* Output completeness
-
-### System Performance
-
-* Processing time
-* Images per second
-* Clustering time
-* GPU utilization
-* VRAM usage
-* RAM usage
-* Failed job rate
-
-A successful identity-clustering configuration should aim for:
-
-```text
-High cluster purity
-+
-Low false merges
-+
-Acceptable fragmentation
-+
-Acceptable unknown rate
-```
-
-rather than simply maximizing the number of merged observations.
-
-See the detailed evaluation documentation for the complete evaluation
-procedure.
-
----
-
-# Limitations
-
-PersonaCluster is intentionally designed as an **event-level identity
-discovery system**.
-
-Current limitations include:
-
-* Identity clusters are anonymous until human labeling is applied.
-* Cross-event identity recognition is not part of the core architecture.
-* Body appearance can change significantly between images.
-* Face visibility and image quality affect identity matching.
-* Clustering thresholds require calibration for different datasets.
-* Very large-scale approximate nearest-neighbor retrieval is not currently
-  required by the core implementation.
-* The system should not be treated as a universal biometric
-  identification system.
-
----
-
-# Design Principles
-
-## 1. Observations Before Identities
-
-```text
-Detection
-    ↓
-Observation
-    ↓
-Identity
-```
-
-A raw detection is never treated as a confirmed identity.
-
-## 2. Face Is the Primary Identity Signal
-
-Face appearance is the primary identity evidence.
-
-Body appearance provides supporting evidence.
-
-## 3. Quality Matters
-
-Strong observations should provide more reliable evidence than poor
-observations.
-
-## 4. Same-Image Merges Are Constrained
-
-Different observations from the same source image cannot simply be
-assigned to the same identity.
-
-## 5. Clustering Happens After Image Processing
-
-Workers generate observations.
-
-The complete event observation set is then used for identity clustering.
-
-## 6. Pose Provides Context
-
-Pose helps with cross-view matching and representative selection but is
-not itself an identity signal.
-
-## 7. Identity Creation Is Stricter Than Identity Expansion
-
-Strong approximately frontal observations can establish trusted anchors.
-
-Additional observations from different viewpoints can subsequently
-contribute to an established identity.
-
-## 8. Output Does Not Change Identity Assignments
-
-`EventOutputManager` operates on already-established clusters.
-
-It selects images and generates the representative face without
-changing the identity-clustering result.
-
-## 9. Each Component Has One Responsibility
-
-The current architecture deliberately avoids unused or duplicated
-components.
-
-```text
-PersonPipeline
-    → creates observations
-
-EventStore
-    → persists processing state and observations
-
-ConstrainedIdentityClustering
-    → discovers anonymous identity clusters
-
-EventOutputManager
-    → selects best images
-    → creates representative faces
-    → writes final output
-```
-
----
-
-# Security and Privacy
-
-PersonaCluster can process photographs containing identifiable people and
-generate face and body appearance embeddings.
-
-Do not commit the following to a public repository:
-
-```text
-Real event photographs
-Real event databases
-Face embeddings
-Body embeddings
-Generated private output
-API keys
-Passwords
-Access tokens
-Private configuration
-```
-
-Use synthetic, consented, or appropriately licensed sample data when
-demonstrating the project.
-
-Also review the licenses and terms of the underlying models and
-dependencies before distributing the project.
-
----
-
-# Documentation
-
-Detailed technical documentation is maintained separately:
-
-```text
-docs/
-├── architecture.md
-├── clustering.md
-├── configuration.md
-├── development.md
-├── evaluation.md
-└── troubleshooting.md
-```
-
-The README provides the high-level project description, architecture, 
-installation, usage, configuration, and limitations.
-
-The documentation files provide deeper technical information about the
-individual parts of the system.
-
----
-
-# Roadmap
-
-Potential future improvements include:
-
-* Human labeling interface
-* Cross-event identity recognition
-* Automated threshold calibration
-* Improved occlusion handling
-* Large-scale approximate nearest-neighbor retrieval
-* Formal benchmark datasets
-* Automated precision/recall evaluation
-* Interactive cluster review tools
-* More advanced temporal or event-context modeling
-
-These are potential future directions and are not required by the
-current core architecture.
-
----
-
-# License
-
-```text
-MIT License
-```
-
----
-
-# Acknowledgements
-
-PersonaCluster builds on open-source computer-vision and machine-learning
-projects including:
-
-* Ultralytics
-* InsightFace
-* TorchReID / Deep-Person-ReID
-* PyTorch
-* OpenCV
-* NumPy
-* scikit-learn
-
-Please review and comply with the licenses and terms of the individual
-dependencies before distributing the project.
-
----
-
-# Project Philosophy
-
-> **Do not ask clustering to compensate for bad observations.**
-
-Reliable identity discovery starts with reliable observations.
-
-```text
-Reliable Detection
-       ↓
-Reliable Observations
-       ↓
-Reliable Persistence
-       ↓
-Constrained Identity Clustering
-       ↓
-Useful Image Selection
-       ↓
-Clear Final Output
-```
+> Gallery images belong to an event, references belong to that same event, processing state belongs to that event, and final output belongs to the event at the project-level `output/<event_name>/` directory.

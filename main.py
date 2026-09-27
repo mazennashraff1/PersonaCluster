@@ -24,7 +24,8 @@ from app.workers.imageWorker import run_image_worker
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-EVENT_PATH = (PROJECT_ROOT / config.EVENTS_PATH).resolve()
+EVENTS_ROOT = (PROJECT_ROOT / config.EVENTS_PATH).resolve()
+EVENT_PATH: Path | None = None
 
 load_dotenv()
 
@@ -163,6 +164,14 @@ def get_image_paths(
     """
 
     event_path = Path(event_path)
+
+    # Only the event Gallery is an input source. The event reference folder,
+    # event.db, and any other event-level files must never be treated as
+    # gallery images.
+    gallery_path = event_path / "Gallery"
+    if not gallery_path.is_dir():
+        return
+    event_path = gallery_path
 
     valid_extensions = {
         ".jpg",
@@ -534,22 +543,29 @@ def run_constrained_clustering(
 # ============================================================
 
 
-def main():
+def process_event(event_path: str | Path):
     """
-    Main event-processing coordinator.
+    Process one event directory.
 
-    Responsibilities:
-
-        1. Open event database
-        2. Recursively discover images
-        3. Create image jobs
-        4. Recover stale jobs
-        5. Start workers
-        6. Wait for workers
-        7. Retry failed images once
-        8. Verify final job state
-        9. Run event-level clustering
+    The event directory must contain:
+        Gallery/      recursively nested event images
+        reference/    event-local reference images
     """
+
+    global EVENT_PATH
+    EVENT_PATH = Path(event_path).resolve()
+
+    if not EVENT_PATH.is_dir():
+        raise FileNotFoundError(f"Event directory does not exist: {EVENT_PATH}")
+
+    gallery_path = EVENT_PATH / "Gallery"
+    reference_path = EVENT_PATH / "reference"
+
+    if not gallery_path.is_dir():
+        raise FileNotFoundError(f"Missing Gallery directory: {gallery_path}")
+
+    if not reference_path.is_dir():
+        print(f"[WARNING] Reference directory does not exist: {reference_path}")
 
     program_start = time.perf_counter()
 
@@ -713,9 +729,12 @@ def main():
         # PHASE 4
         # Match discovered clusters against known references
         # ====================================================
+        print()
+        print("EVENT REFERENCE MATCHING")
+        print("=" * 60)
         # The clustering algorithm is unchanged. A single known person may
         # own multiple cluster IDs (for example frontal + side/profile).
-        reference_matcher = ReferenceMatcher(config.REFERENCES_PATH)
+        reference_matcher = ReferenceMatcher(reference_path)
         cluster_person_matches, match_details = reference_matcher.match_clusters(
             observations=observations,
             assignments=assignments,
@@ -734,6 +753,9 @@ def main():
         # PHASE 5
         # Final reference-matched event output
         # ====================================================
+        print()
+        print("GENERATING FINAL OUTPUT")
+        print("=" * 60)
 
         output_manager = EventOutputManager(
             event_path=EVENT_PATH,
@@ -749,8 +771,6 @@ def main():
         )
 
         print(f"Output directory: {output_directory}")
-
-        # counts = {"PENDING": 0, "PROCESSING": 0, "COMPLETED": 4055, "FAILED": 0}
 
         # ====================================================
         # PHASE 6
@@ -857,4 +877,48 @@ if __name__ == "__main__":
 
     multiprocessing.freeze_support()
 
-    main()
+    print("=" * 60)
+    print("PERSONACLUSTER EVENT BATCH")
+    print("=" * 60)
+    print(f"Events root: {EVENTS_ROOT}")
+
+    if not EVENTS_ROOT.is_dir():
+        raise FileNotFoundError(f"Events root does not exist: {EVENTS_ROOT}")
+
+    event_directories = sorted(
+        (path for path in EVENTS_ROOT.iterdir() if path.is_dir()),
+        key=lambda path: path.name.casefold(),
+    )
+
+    if not event_directories:
+        print("No event directories found.")
+        raise SystemExit(0)
+
+    print(f"Events found: {len(event_directories)}")
+    for event_directory in event_directories:
+        print(f"  - {event_directory.name}")
+
+    failures = []
+    for event_directory in event_directories:
+        try:
+            process_event(event_directory)
+        except Exception as exc:
+            failures.append((event_directory.name, exc))
+            print()
+            print("=" * 60)
+            print(f"EVENT FAILED: {event_directory.name}")
+            print("=" * 60)
+            print(f"Error: {exc}")
+            print("Continuing with the next event.")
+
+    print()
+    print("=" * 60)
+    print("ALL EVENTS COMPLETE")
+    print("=" * 60)
+    print(f"Processed events: {len(event_directories) - len(failures)}")
+    print(f"Failed events: {len(failures)}")
+    for event_name, error in failures:
+        print(f"  - {event_name}: {error}")
+
+    if failures:
+        raise SystemExit(1)

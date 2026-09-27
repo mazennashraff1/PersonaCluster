@@ -1,16 +1,10 @@
 # PersonaCluster Identity Clustering
 
-This document describes the identity-discovery stage of PersonaCluster.
-
-The clustering system is designed for **closed events**. It discovers
-anonymous identity clusters from observations generated within the same
-event rather than matching against a permanent named-person gallery.
+This document describes event-level identity discovery. Clustering is performed independently for each event after its Gallery images have been processed.
 
 ---
 
-## 1. Identity Discovery Pipeline
-
-The current event-level identity stage is:
+# 1. Identity Discovery Pipeline
 
 ```text
 Completed Observations
@@ -29,243 +23,163 @@ Constrained Identity Clustering
 Anonymous Identity Clusters
         │
         ▼
-Event Output Manager
+Event Reference Matching
         │
-        ├── Best Images
-        └── Representative Face
+        ▼
+Known-Person Output
 ```
 
-An identity cluster represents observations believed to belong to the
-same real-world person.
-
-It does not automatically contain a person's real name.
+A cluster is an event-level identity hypothesis. It is not automatically a person's real name.
 
 ---
 
-## 2. Observation vs Identity
+# 2. Event Isolation
 
-An observation is an image-level occurrence.
+Clustering never mixes events.
 
-An identity is an event-level hypothesis.
+For:
 
 ```text
-Image Detection
-      ↓
-Observation
-      ↓
-Candidate Identity
-      ↓
-Cluster
-      ↓
-Human Labeling
+data/events/EEA/
+data/events/Event_2026/
 ```
 
-A detection should never be treated as a confirmed identity merely
-because it has a face embedding.
+there are two independent observation sets and two independent clustering runs.
+
+References are also event-local:
+
+```text
+data/events/EEA/reference/
+data/events/Event_2026/reference/
+```
 
 ---
 
-## 3. Identity Evidence
+# 3. Observation vs Identity
 
-PersonaCluster uses two appearance modalities:
+```text
+Image
+  ↓
+Observation
+  ↓
+Candidate identity
+  ↓
+Cluster
+  ↓
+Reference match
+```
+
+An observation represents an occurrence in one image. A cluster represents a collection of observations believed to belong to one event-level person.
+
+---
+
+# 4. Identity Evidence
+
+The two main appearance modalities are:
 
 ```text
 Face
-  └── Face embedding
+ └── normalized face embedding
 
 Body
-  └── OSNet appearance embedding
+ └── OSNet appearance embedding
 ```
 
-The face embedding is the primary identity signal.
+Face is the primary identity signal.
 
-The body embedding provides supporting evidence, especially when
-observations contain different viewpoints or imperfect facial evidence.
+Body is supporting evidence.
 
----
-
-## 4. Face Similarity
-
-Face similarity is the main identity comparison signal.
-
-The implementation uses normalized face embeddings, allowing
-cosine-style similarity to be calculated efficiently.
-
-A face similarity threshold provides a lower boundary below which a face
-comparison cannot establish an identity merge.
-
-The configured value is project-specific and should be calibrated
-against representative event datasets.
+Quality indicates the reliability of the evidence.
 
 ---
 
-## 5. Body Similarity
+# 5. Standard Matching Weights
 
-Body similarity is calculated from normalized OSNet appearance
-embeddings.
+The baseline configuration uses:
 
-Body evidence is useful when:
+```python
+CLUSTER_FACE_WEIGHT = 0.65
+CLUSTER_BODY_WEIGHT = 0.20
+CLUSTER_QUALITY_WEIGHT = 0.15
+```
 
-* The face is partially informative.
-* Viewpoints differ.
-* Face quality is imperfect.
-* Appearance provides additional supporting context.
+For observations without a valid body embedding:
 
-Body evidence is intentionally weaker than face evidence because
-clothing, pose, lighting, and appearance can change.
+```python
+CLUSTER_FACE_ONLY_WEIGHT = 0.75
+CLUSTER_FACE_ONLY_QUALITY_WEIGHT = 0.25
+```
+
+These are project-specific parameters and should be calibrated against representative datasets.
 
 ---
 
-## 6. Quality-Aware Matching
+# 6. Face Similarity
 
-Not all observations are equally reliable.
+The baseline face threshold is:
 
-Matching therefore considers observation quality in addition to
-appearance similarity.
+```python
+MIN_FACE_SIMILARITY = 0.55
+```
 
-Current quality signals include:
+A comparison below the configured minimum cannot create an identity merge.
+
+The threshold is not a universal biometric threshold.
+
+---
+
+# 7. Merge Threshold
+
+The baseline combined-score threshold is:
+
+```python
+MERGE_THRESHOLD = 0.78
+```
+
+A candidate pair must satisfy the configured compatibility rules and combined score before merging.
+
+---
+
+# 8. Same-Image Constraint
+
+Two observations from the same source image cannot be assigned to the same identity cluster.
+
+For example:
 
 ```text
-Detection confidence
-Bounding-box size
-Image sharpness
+IMG001.jpg
+ ├── Observation A
+ └── Observation B
 ```
 
-Quality is normalized to the range:
+A and B must not be merged into one identity.
+
+This is a correctness constraint.
+
+---
+
+# 9. Quality-Aware Matching
+
+Quality is derived from signals such as:
+
+- Detection confidence
+- Face/body size
+- Image sharpness
+
+Quality is normalized to:
 
 ```text
 0.0 → poor
 1.0 → strong
 ```
 
-Quality supports matching decisions but does not independently determine
-identity.
+Quality supports identity matching; it is not itself an identity signal.
 
 ---
 
-## 7. Standard Matching Weights
+# 10. Face Pose
 
-The standard combined identity score uses the configured weighting of:
-
-```text
-Face
-Body
-Quality
-```
-
-The face component has the strongest influence, while body appearance
-and quality provide supporting evidence.
-
-Conceptually:
-
-```text
-Combined Score
-    =
-    Face Evidence
-    +
-    Body Evidence
-    +
-    Quality Evidence
-```
-
-For observations without a valid body embedding, body evidence is not
-used.
-
-The exact weights and thresholds are configuration parameters and the
-implementation remains authoritative.
-
----
-
-## 8. Minimum Face Similarity
-
-The clustering configuration defines a minimum face-similarity
-requirement.
-
-The important rule is:
-
-> A face similarity below the configured minimum cannot create an
-> identity merge, even when other evidence is favorable.
-
-This provides a conservative guard against weak facial matches.
-
-The configured value is a project parameter, not a universal biometric
-threshold.
-
----
-
-## 9. Merge Threshold
-
-The clustering configuration defines a minimum combined-score threshold
-for cluster merging.
-
-A compatible candidate pair must satisfy the configured identity rules
-and combined-score requirement before being merged.
-
-Thresholds should be calibrated using labeled evaluation data.
-
----
-
-## 10. Same-Image Constraint
-
-Two different observations from the same source image cannot belong to
-the same identity cluster.
-
-Example:
-
-```text
-IMG_001.jpg
-
-Observation A
-Observation B
-Observation C
-```
-
-The clustering stage must not merge A and B into the same identity
-merely because their embeddings are similar.
-
-This is a hard clustering constraint.
-
-The purpose is to prevent the clustering algorithm from interpreting
-multiple detected people in one photograph as the same event-level
-identity.
-
----
-
-## 11. Conservative Matching Philosophy
-
-PersonaCluster prioritizes:
-
-```text
-High precision
-    >
-Maximum recall
-```
-
-A false merge can contaminate an entire identity cluster.
-
-Therefore the system may intentionally leave uncertain observations
-fragmented:
-
-```text
-Cluster A → Person X
-Cluster B → Person X
-```
-
-rather than risk:
-
-```text
-Cluster A → Person X + Person Y
-```
-
-Fragmentation can later be reduced through threshold calibration and
-stronger matching logic.
-
----
-
-## 12. Face Pose
-
-Face pose is estimated from InsightFace's five facial landmarks using
-OpenCV `solvePnP`.
+Pose is estimated from facial landmarks using OpenCV `solvePnP`.
 
 The system derives:
 
@@ -275,437 +189,171 @@ Pitch
 Roll
 ```
 
-and a coarse pose category:
+and coarse categories such as:
 
 ```text
 frontal
 left
 right
 profile
+unknown
 ```
 
 Pose is contextual evidence.
 
-It is not treated as an identity embedding.
-
 ---
 
-## 13. Pose Thresholds
+# 11. Identity Anchors
 
-The coarse pose classification uses configured yaw thresholds.
+Strong observations can act as identity anchors.
+
+Anchor requirements include configurable limits for:
+
+- Face quality
+- Face detection confidence
+- Face size
+- Face pose/yaw
 
 Conceptually:
 
 ```text
-Frontal
-    |yaw| <= configured frontal threshold
-
-Profile
-    |yaw| >= configured profile threshold
-
-Intermediate yaw
-    → left or right according to yaw direction
+Clear + sufficiently large + approximately frontal
+                    │
+                    ▼
+              Identity Anchor
 ```
 
-The pose estimator is intended for coarse identity and representative
-selection decisions, not precise 3D head-pose measurement.
+A weak profile observation should not independently establish a strong identity when the anchor rules reject it.
+
+It may still contribute to an existing identity when clustering rules allow it.
 
 ---
 
-## 14. Cross-Pose Matching
+# 12. Cross-Pose Matching
 
-Different viewpoints can produce weaker face similarity than same-pose
-comparisons.
-
-PersonaCluster therefore supports a dedicated cross-pose matching path.
-
-Cross-pose matching uses its own configured requirements for:
+Cross-pose comparisons use dedicated configuration values:
 
 ```text
-Minimum face similarity
-Minimum body similarity
-Merge threshold
+CROSS_POSE_MIN_FACE_SIMILARITY
+CROSS_POSE_MIN_BODY_SIMILARITY
+CROSS_POSE_MERGE_THRESHOLD
 ```
 
-The purpose is to allow an anchored identity to expand across different
-viewpoints while preventing weak cross-pose evidence from being treated
-as a strong same-pose match.
-
-The configured values are project-specific and should be calibrated
-against representative event data.
+The purpose is to allow an anchored identity to expand across viewpoints without treating weak cross-pose evidence as equivalent to strong same-pose evidence.
 
 ---
 
-## 15. Identity Anchors
-
-A cluster can use strong frontal observations as trusted identity
-anchors.
-
-Anchor requirements are controlled through the clustering
-configuration and include requirements related to:
-
-```text
-Face quality
-Face detection confidence
-Face size
-Face pose
-Yaw
-```
+# 13. Cluster Merge Strategy
 
 Conceptually:
 
 ```text
-Clear + sufficiently large + approximately frontal face
-                         │
-                         ▼
-                   Identity Anchor
-```
-
-Profile-only or weak side-view observations should not independently
-establish a strong identity when the configured anchor requirements are
-not satisfied.
-
-They can contribute to an existing identity when the clustering rules
-allow the match.
-
----
-
-## 16. Identity Expansion
-
-The identity lifecycle is therefore:
-
-```text
-Strong frontal observation
-          │
-          ▼
-     Identity Anchor
-          │
-          ├── Frontal observations
-          ├── Left-view observations
-          ├── Right-view observations
-          └── Profile observations
-```
-
-This separates:
-
-```text
-Identity creation
-```
-
-from:
-
-```text
-Identity expansion
-```
-
-The creation step is deliberately stricter.
-
----
-
-## 17. Cluster Merge Strategy
-
-The clustering process maintains compatible candidate pairs and
-prioritizes strong candidates.
-
-Conceptually:
-
-```text
-Candidate Cluster Pairs
+Candidate cluster pairs
         │
         ▼
-Calculate Pair Compatibility
+Compatibility calculation
         │
         ▼
-Priority Queue
+Priority ordering
         │
         ▼
-Strongest Compatible Pair
+Strongest compatible merge
         │
         ▼
-Merge
-        │
-        ▼
-Update Affected Cluster State
+Update cluster state
         │
         ▼
 Continue
-        │
-        ▼
-Final Cluster Assignments
 ```
 
-The merge rules remain authoritative:
+The main rules are:
 
 1. Face similarity is primary.
-2. Body similarity provides supporting evidence.
+2. Body similarity is supporting evidence.
 3. Quality supports reliability.
-4. Strong observations can act as cluster representatives.
+4. Strong observations can represent an identity.
 5. Same-image observations cannot share an identity cluster.
-6. Cross-pose comparisons use their dedicated requirements.
-7. Strong compatible pairs are considered first.
-8. Configured thresholds remain authoritative.
 
 ---
 
-## 18. Clustering Caches
+# 14. Cluster Persistence
 
-The implementation can cache frequently used clustering information,
-including:
+Cluster assignments are persisted in the event database:
 
 ```text
-Face embeddings
-Body embeddings
-Quality values
-Cluster representatives
-Pair scores
+data/events/<event_name>/event.db
 ```
 
-These caches are performance optimizations.
+This allows subsequent runs to reuse compatible clustering state when the relevant observations and configuration have not changed.
 
-They do not change the identity rules.
-
-When clusters change, affected cached information is updated or
-invalidated as required by the clustering implementation.
+When an image changes, dependent state can be invalidated and rebuilt.
 
 ---
 
-## 19. Cluster Statistics
+# 15. Reference Matching Is Separate
 
-Useful clustering statistics include:
+Clustering discovers anonymous identities.
+
+Reference matching then maps accepted clusters to known people from:
 
 ```text
-Total observations
-Valid face observations
-Clustered observations
-Unknown observations
-Cluster count
-Rejected same-image merges
-Rejected low-similarity merges
+data/events/<event_name>/reference/
 ```
 
-Cluster count alone is not sufficient to evaluate clustering quality.
+This separation is intentional:
 
-A useful evaluation should also consider false merges and fragmentation.
+```text
+Event observations
+       ↓
+Anonymous clusters
+       ↓
+Reference matching
+       ↓
+Known-person output
+```
+
+A known person may own more than one cluster.
 
 ---
 
-## 20. Clustering vs Final Image Selection
+# 16. Output Implications
 
-Identity clustering and final image selection are separate
-responsibilities.
+The output manager aggregates accepted clusters by person.
+
+Example:
 
 ```text
-ConstrainedIdentityClustering
-    ↓
-Determines identity assignments
-
-EventOutputManager
-    ↓
-Selects strong images
-    ↓
-Creates representative face
-    ↓
-Writes final cluster output
+Person A
+ ├── Cluster 4
+ ├── Cluster 9
+ └── Cluster 17
 ```
 
-The output stage does not reassign observations or modify cluster
-identity assignments.
+becomes:
 
-There is no separate `BestImageSelector` component in the current
-architecture.
+```text
+output/EEA/Person A/
+├── All Images/
+├── Best Images/
+└── representative Image.jpg
+```
 
-Best-image selection is handled by `EventOutputManager` as part of final
-event output generation.
+Clusters from another event are never included.
 
 ---
 
-## 21. Representative Face
+# 17. Tuning Guidance
 
-The representative face is selected after identity clustering.
+Thresholds should be calibrated using labeled event data.
 
-The purpose is to provide one useful face image that visually
-represents the discovered identity.
+Evaluate:
 
-Conceptually:
+- False merges
+- Fragmentation
+- Unknown observations
+- Same-image violations
+- Cross-pose behavior
+- Anchor quality
+- Best-image quality
 
-```text
-Cluster
-   │
-   ▼
-Candidate observations
-   │
-   ▼
-Face quality / pose / availability
-   │
-   ▼
-Best representative face
-   │
-   ▼
-cluster01/face.jpg
-```
-
-The representative is a real image crop from the event.
-
-It is not a generated identity image and does not introduce an external
-person reference.
-
----
-
-## 22. Event Output
-
-After clustering, reference matching determines which discovered clusters
-belong to known people. `EventOutputManager` then combines all matched
-clusters belonging to the same person into one final person directory.
-
-For example:
-
-```text
-output/
-└── Person Name/
-    ├── All Images/
-    ├── Best Images/
-    └── representative Image.jpg
-```
-
-After the local output is created, the final Excel summary is generated:
-
-```text
-final_results.xlsx
-├── Name of Person
-├── Phone Number
-└── Folder Shared Link
-```
-
-The clustering stage determines cluster membership. Reference matching maps
-eligible clusters to known people. The output manager only presents those
-already-established matches and does not change identity assignments.
-
-This separation is important:
-
-```text
-Clustering
-    → Identity assignment
-
-Output Manager
-    → Image selection and presentation
-```
-
----
-
-## 23. Important Failure Modes
-
-### False merge
-
-Two real people are incorrectly placed in one cluster.
-
-This is generally more damaging than fragmentation because it
-contaminates the identity cluster.
-
-### Fragmentation
-
-Observations belonging to one person are divided across multiple
-clusters.
-
-Fragmentation is undesirable but often safer than a false merge under a
-precision-first strategy.
-
-### Weak anchor
-
-An identity may fail to form when all available observations are
-low-quality or do not satisfy the configured anchor requirements.
-
-### Poor cross-pose evidence
-
-A profile or side-view observation may not contain enough information to
-safely connect to an anchored identity.
-
-### Conflicting evidence
-
-Face and body evidence may disagree.
-
-The system should favor strong facial evidence while respecting the
-configured similarity, quality, pose, and same-image constraints.
-
----
-
-## 24. Calibration
-
-Thresholds should not be treated as universal biometric values.
-
-Calibration should use representative labeled event data.
-
-A useful process is:
-
-```text
-Collect representative events
-        ↓
-Create ground truth
-        ↓
-Run baseline configuration
-        ↓
-Measure purity / false merges / fragmentation
-        ↓
-Tune thresholds
-        ↓
-Re-run
-        ↓
-Compare results
-```
-
-Threshold changes should be evaluated quantitatively and visually.
-
----
-
-## 25. Current Responsibility Boundaries
-
-The current implementation keeps identity discovery responsibilities
-inside the clustering stage and final image organization inside
-`EventOutputManager`.
-
-```text
-PersonPipeline
-    → creates observations
-
-EventStore
-    → persists observations
-
-ConstrainedIdentityClustering
-    → discovers anonymous identity clusters
-
-EventOutputManager
-    → selects best images
-    → creates representative face
-    → writes final output
-```
-
-The following former components are **not separate stages in the current
-architecture**:
-
-```text
-Same-Image Duplicate Suppression
-IdentityProfile
-BestImageSelector
-```
-
-Their former responsibilities have either been removed because they are
-not part of the active execution path or incorporated into the current
-clustering/output implementation.
-
----
-
-## 26. Core Clustering Principles
-
-1. Face is the primary identity signal.
-2. Body is supporting evidence.
-3. Quality determines evidence reliability.
-4. Same-image identity merges are forbidden.
-5. Cross-pose matching has dedicated requirements.
-6. Trusted observations can establish or strengthen identity clusters.
-7. Strong observations should represent clusters.
-8. Conservative decisions are preferred when evidence is ambiguous.
-9. Clustering operates on the complete event observation set.
-10. Clustering produces anonymous identities, not names.
-11. Best-image selection is performed after clustering.
-12. `EventOutputManager` owns final image selection and representative
-    generation.
-13. Output generation does not modify identity assignments.
+Do not interpret a project-specific similarity threshold as a universal biometric standard.

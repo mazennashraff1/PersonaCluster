@@ -49,7 +49,10 @@ class EventOutputManager:
                 f"Expected one of: {', '.join(sorted(self.VALID_MODES))}."
             )
 
-        self.output_root = self.event_path / output_directory_name
+        project_root = self._project_root()
+        # Final output is shared at project root, separated by event:
+        # output/<event_name>/<person_name>/...
+        self.output_root = project_root / output_directory_name / self.event_path.name
 
     @staticmethod
     def _project_root() -> Path:

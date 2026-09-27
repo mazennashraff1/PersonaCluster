@@ -235,3 +235,5 @@ models/*
 
 credentials/
 data/google_drive/
+
+output/EEA

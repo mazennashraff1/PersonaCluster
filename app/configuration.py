@@ -22,17 +22,17 @@ If a parameter needs tuning, change it HERE.
 ENABLE_VISUALIZATION = False
 
 # General quality range.
-QUALITY_MIN = 0.0
-QUALITY_MAX = 1.0
+QUALITY_MIN = 0
+QUALITY_MAX = 1
 
 
 # ============================================================
 # PERSON DETECTOR
 # ============================================================
 
-PERSON_MODEL_NAME = "models/yolo11n.pt"
+PERSON_MODEL_NAME = 'models/yolo11n.pt'
 
-PERSON_DETECTION_THRESHOLD = 0.40
+PERSON_DETECTION_THRESHOLD = 0.4
 
 # None = automatically use the default Ultralytics device.
 # Examples:
@@ -50,11 +50,11 @@ PERSON_CLASS_ID = 0
 # FACE DETECTOR
 # ============================================================
 
-FACE_MODEL_NAME = "buffalo_l"
+FACE_MODEL_NAME = 'buffalo_l'
 
-FACE_DETECTION_SIZE = (640, 640)
+FACE_DETECTION_SIZE = [640, 640]
 
-FACE_DETECTION_THRESHOLD = 0.40
+FACE_DETECTION_THRESHOLD = 0.4
 
 # InsightFace execution context.
 #
@@ -67,14 +67,14 @@ FACE_CTX_ID = 0
 # FACE / BODY ASSOCIATION
 # ============================================================
 
-ASSOCIATION_MIN_SCORE = 0.30
+ASSOCIATION_MIN_SCORE = 0.3
 
 
 # ============================================================
 # BODY ENCODER
 # ============================================================
 
-BODY_MODEL_NAME = "osnet_x1_0"
+BODY_MODEL_NAME = 'osnet_x1_0'
 
 # None = use Torchreid's normal pretrained model.
 BODY_MODEL_PATH = None
@@ -89,18 +89,18 @@ BODY_DEVICE = None
 
 # Portion of the person bounding box used for
 # appearance/body embedding.
-BODY_UPPER_BODY_RATIO = 0.60
+BODY_UPPER_BODY_RATIO = 0.6
 
 
 # ============================================================
 # FACE QUALITY
 # ============================================================
 
-FACE_QUALITY_DETECTION_WEIGHT = 0.40
+FACE_QUALITY_DETECTION_WEIGHT = 0.4
 
-FACE_QUALITY_SIZE_WEIGHT = 0.30
+FACE_QUALITY_SIZE_WEIGHT = 0.3
 
-FACE_QUALITY_SHARPNESS_WEIGHT = 0.30
+FACE_QUALITY_SHARPNESS_WEIGHT = 0.3
 
 # Minimum useful face dimension in pixels.
 FACE_MIN_SIZE = 40
@@ -109,9 +109,9 @@ FACE_MIN_SIZE = 40
 FACE_REFERENCE_SIZE = 120
 
 # Laplacian variance calibration.
-FACE_SHARPNESS_MIN = 20.0
+FACE_SHARPNESS_MIN = 20
 
-FACE_SHARPNESS_MAX = 150.0
+FACE_SHARPNESS_MAX = 150
 
 
 # ============================================================
@@ -121,19 +121,19 @@ FACE_SHARPNESS_MAX = 150.0
 # Coarse yaw boundaries used for identity-profile grouping.
 # These are intentionally configurable because the final values
 # should be calibrated against the event's own images.
-FACE_POSE_FRONTAL_YAW_DEGREES = 20.0
-FACE_POSE_PROFILE_YAW_DEGREES = 55.0
+FACE_POSE_FRONTAL_YAW_DEGREES = 20
+FACE_POSE_PROFILE_YAW_DEGREES = 55
 
 
 # ============================================================
 # BODY QUALITY
 # ============================================================
 
-BODY_QUALITY_DETECTION_WEIGHT = 0.40
+BODY_QUALITY_DETECTION_WEIGHT = 0.4
 
-BODY_QUALITY_SIZE_WEIGHT = 0.30
+BODY_QUALITY_SIZE_WEIGHT = 0.3
 
-BODY_QUALITY_SHARPNESS_WEIGHT = 0.30
+BODY_QUALITY_SHARPNESS_WEIGHT = 0.3
 
 # Minimum useful body dimension in pixels.
 BODY_MIN_SIZE = 100
@@ -142,9 +142,9 @@ BODY_MIN_SIZE = 100
 BODY_REFERENCE_SIZE = 400
 
 # Laplacian variance calibration.
-BODY_SHARPNESS_MIN = 20.0
+BODY_SHARPNESS_MIN = 20
 
-BODY_SHARPNESS_MAX = 150.0
+BODY_SHARPNESS_MAX = 150
 
 
 # ============================================================
@@ -169,11 +169,11 @@ MERGE_THRESHOLD = 0.78
 
 # Minimum face similarity required when comparing observations
 # belonging to different face-pose groups.
-CROSS_POSE_MIN_FACE_SIMILARITY = 0.60
+CROSS_POSE_MIN_FACE_SIMILARITY = 0.6
 
 # Minimum body similarity required when comparing observations
 # belonging to different face-pose groups.
-CROSS_POSE_MIN_BODY_SIMILARITY = 0.50
+CROSS_POSE_MIN_BODY_SIMILARITY = 0.5
 
 # Final combined similarity required for a cross-pose merge.
 CROSS_POSE_MERGE_THRESHOLD = 0.75
@@ -197,18 +197,18 @@ REPRESENTATIVE_COUNT = 3
 
 # Minimum face quality required for an observation to be
 # considered a reliable identity anchor.
-ANCHOR_MIN_FACE_QUALITY = 0.50
+ANCHOR_MIN_FACE_QUALITY = 0.5
 
 # Minimum face detector confidence required for an observation
 # to be considered a reliable identity anchor.
-ANCHOR_MIN_FACE_DETECTION_CONFIDENCE = 0.50
+ANCHOR_MIN_FACE_DETECTION_CONFIDENCE = 0.5
 
 # Minimum face dimension in pixels required for an observation
 # to be used as an anchor.
 ANCHOR_MIN_FACE_SIZE = 40
 
 # Maximum absolute yaw allowed for a frontal anchor.
-ANCHOR_MAX_YAW_DEGREES = 20.0
+ANCHOR_MAX_YAW_DEGREES = 20
 
 
 # ------------------------------------------------------------
@@ -232,7 +232,7 @@ MIN_CLUSTER_SIZE = 2
 # These should normally add up to 1.0.
 CLUSTER_FACE_WEIGHT = 0.65
 
-CLUSTER_BODY_WEIGHT = 0.20
+CLUSTER_BODY_WEIGHT = 0.2
 
 CLUSTER_QUALITY_WEIGHT = 0.15
 
@@ -288,7 +288,7 @@ REPRESENTATIVE_COUNT = 3
 # Live processing window scale.
 #
 # 0.5 = 50% of original image size.
-VISUALIZATION_SCALE = 0.50
+VISUALIZATION_SCALE = 0.5
 
 # OpenCV waitKey delay in milliseconds.
 #
@@ -315,12 +315,12 @@ VISUALIZATION_MAX_ITEMS_PER_CLUSTER = 100
 
 # Weights used when selecting the best representative
 # observation for a cluster.
-REPRESENTATIVE_FACE_QUALITY_WEIGHT = 0.70
+REPRESENTATIVE_FACE_QUALITY_WEIGHT = 0.7
 
-REPRESENTATIVE_FACE_DETECTION_WEIGHT = 0.30
+REPRESENTATIVE_FACE_DETECTION_WEIGHT = 0.3
 
 # Output directory name.
-CLUSTER_VISUALIZATION_DIR_NAME = "cluster_visualization"
+CLUSTER_VISUALIZATION_DIR_NAME = 'cluster_visualization'
 
 
 # ============================================================
@@ -328,12 +328,10 @@ CLUSTER_VISUALIZATION_DIR_NAME = "cluster_visualization"
 # ============================================================
 
 # Root directory containing event folders/images.
-EVENTS_PATH = "data/events"
-
-# Root directory containing known/reference people.
+EVENTS_PATH = 'data/events'
 
 # SQLite database filename.
-EVENT_DATABASE_FILENAME = "event.db"
+EVENT_DATABASE_FILENAME = 'event.db'
 
 # ============================================================
 # Worker configuration
@@ -363,7 +361,7 @@ WORKER_USE_PROCESSES = True
 #     Person Name - Phone Number.ext
 # The phone number is metadata only; the person name becomes
 # the final output folder name.
-REFERENCES_PATH = "data/reference"
+REFERENCES_PATH = 'reference'
 
 # Minimum cosine similarity between a reference face embedding
 # and an observation in a discovered cluster for that cluster
@@ -376,10 +374,10 @@ REFERENCE_MATCH_THRESHOLD = 0.55
 REFERENCE_MATCH_MIN_MARGIN = 0.02
 
 # Final output directory inside the event directory.
-EVENT_OUTPUT_DIRECTORY_NAME = "output"
+EVENT_OUTPUT_DIRECTORY_NAME = 'output'
 
 # The reference-matched person output is the default final mode.
-EVENT_OUTPUT_MODE = "REFERENCE_MATCHED"
+EVENT_OUTPUT_MODE = 'REFERENCE_MATCHED'
 
 # Remove previous final output before rebuilding it.
 EVENT_OUTPUT_CLEAN_BEFORE_RUN = True
@@ -400,4 +398,4 @@ BEST_IMAGES_REQUIRE_POSE_DIVERSITY = True
 # GOOGLE_DRIVE_PUBLIC_LINK=True.
 # "writer" means anyone with that person's folder link can edit
 # that folder and its contents. The event folder is not public.
-GOOGLE_DRIVE_PUBLIC_LINK_ROLE = "writer"
+GOOGLE_DRIVE_PUBLIC_LINK_ROLE = 'writer'
